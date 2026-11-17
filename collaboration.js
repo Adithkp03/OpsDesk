@@ -13,8 +13,8 @@ module.exports=(app,{currentUser,canSeeAll,getTicketScoped})=>{
  const ops=(req,res)=>{if(!canSeeAll(req.user)){res.status(403).json({error:'Ops access only'});return false;}return true;};
  const ticket=(req,res)=>{const r=getTicketScoped(req,Number(req.params.id));if(r.error){res.status(r.error).json({error:'Ticket not accessible'});return null;}return r.ticket;};
  function profiles(){return db.prepare('SELECT p.*,u.name FROM agent_profiles p JOIN users u ON u.id=p.user_id ORDER BY u.id').all().map(p=>({...p,regions:JSON.parse(p.regions),available:!!p.available,load:db.prepare("SELECT COUNT(*) n FROM tickets WHERE assigned_to=? AND status NOT IN('Resolved','Closed')").get(p.user_id).n}));}
- function ownership(t,newId,actor,reason){
-  db.transaction(()=>{db.prepare("UPDATE tickets SET assigned_to=?,updated_at=datetime('now') WHERE id=?").run(newId,t.id);db.prepare('INSERT INTO routing_audit(ticket_id,actor_id,old_owner,new_owner,reason) VALUES(?,?,?,?,?)').run(t.id,actor,t.assigned_to,newId,reason);logActivity(t.id,actor,'assigned',reason);})();
+ function ownership(t,newId,actor,reason,writeActivity=true){
+  db.transaction(()=>{db.prepare("UPDATE tickets SET assigned_to=?,work_queue=CASE WHEN (SELECT role FROM users WHERE id=?)='em' THEN 'escalation' ELSE 'operations' END,updated_at=datetime('now') WHERE id=?").run(newId,newId,t.id);db.prepare('INSERT INTO routing_audit(ticket_id,actor_id,old_owner,new_owner,reason) VALUES(?,?,?,?,?)').run(t.id,actor,t.assigned_to,newId,reason);if(writeActivity)logActivity(t.id,actor,'assigned',reason);})();
  }
  app.get('/api/routing/agents',currentUser,(req,res)=>{if(ops(req,res))res.json({agents:profiles(),simulation:true});});
  app.post('/api/routing/agents/:agentId',currentUser,(req,res)=>{

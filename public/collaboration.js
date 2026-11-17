@@ -1,5 +1,5 @@
 // MVP2+3 UI: explicit ownership and independent side-conversation audiences.
-let queueRegion='', queueIntent='';
+let queueRegion='', queueIntent='',queueSla='';
 async function routingPanel(){
  const {agents}=await api('/routing/agents');
  return `<div class="card" style="margin-bottom:16px"><div class="section-title">Routing signals · simulated availability</div><p class="sub">Available agents first, then agency region match, then lowest active load. Queue ranked P1 → P2 → P3. No FIFO/LIFO-only routing.</p><div class="chips">${agents.map(a=>`<button class="btn small" onclick="toggleAvailability(${a.user_id},${!a.available})">${esc(a.name)} · ${esc(a.regions.join('/'))} · ${a.load} active · ${a.available?'Available':'Away'} (toggle)</button>`).join('')}</div></div>`;
@@ -8,16 +8,18 @@ async function toggleAvailability(id,available){try{await api('/routing/agents/'
 async function viewQueue(){
  const u=userById(me()),isOps=u.role!=='requester';
  const params=new URLSearchParams();
- if(['triage','mine','linked'].includes(queueFilter))params.set('view',queueFilter);
+ if(['triage','mine','linked','escalation','operations'].includes(queueFilter))params.set('view',queueFilter);
  if(queueRegion)params.set('region',queueRegion);
  if(queueIntent)params.set('intent',queueIntent);
+ if(queueSla)params.set('sla',queueSla);
  const {tickets}=await api('/tickets?'+params);
- const statuses=['all','triage','mine','linked','New','Open','Pending','Escalated','Resolved','Closed'];
- const shown=statuses.slice(4).includes(queueFilter)?tickets.filter(t=>t.status===queueFilter):tickets;
- $app.innerHTML=`<div class="page-head"><div><h1>${isOps?(queueFilter==='triage'?'Triage · unassigned':queueFilter==='mine'?'My queue':queueFilter==='linked'?'Linked cases':'All tickets'):esc(u.agency_name)+' tickets'}</h1><div class="sub">${shown.length} tickets · ranked by priority P1 → P2 → P3</div></div><a class="btn primary" href="#/new">+ New ticket</a></div>
+ const statuses=['all','triage','mine','linked','New','Open','Pending','Escalated','Resolved','Closed','operations','escalation'];
+ const shown=['New','Open','Pending','Escalated','Resolved','Closed'].includes(queueFilter)?tickets.filter(t=>t.status===queueFilter):tickets;
+ $app.innerHTML=`<div class="page-head"><div><h1>${isOps?(queueFilter==='triage'?'Triage · unassigned':queueFilter==='mine'?'My queue':queueFilter==='linked'?'Linked cases':queueFilter==='escalation'?'Escalation Manager queue':queueFilter==='operations'?'Operations queue':'All tickets'):esc(u.agency_name)+' tickets'}</h1><div class="sub">${shown.length} tickets · ranked by priority P1 → P2 → P3</div></div>${isOps?'<a class="btn" href="#/insights">Weekly insights</a>':''}<a class="btn primary" href="#/new">+ New ticket</a></div>
  ${isOps?await routingPanel():''}
- <div class="chips">${statuses.filter(s=>isOps||!['triage','mine'].includes(s)).map(s=>`<button class="chip ${queueFilter===s?'on':''}" onclick="queueFilter='${s}';viewQueue()">${({all:'All tickets',triage:'Triage (unassigned)',mine:'My queue',linked:'Linked cases'})[s]||s}</button>`).join('')}</div>
+ <div class="chips">${statuses.filter(s=>isOps||!['triage','mine','escalation','operations'].includes(s)).map(s=>`<button class="chip ${queueFilter===s?'on':''}" onclick="queueFilter='${s}';viewQueue()">${({all:'All tickets',triage:'Triage (unassigned)',mine:'My queue',linked:'Linked cases',operations:'Operations queue',escalation:'Escalation Manager queue'})[s]||s}</button>`).join('')}</div>
  <div class="form-row" style="margin:12px 0"><label class="f">By region<select class="f" id="queueRegion" onchange="queueRegion=this.value;viewQueue()"><option value="">All regions</option>${[...new Set(boot.agencies.map(a=>a.region))].map(r=>`<option ${r===queueRegion?'selected':''}>${esc(r)}</option>`).join('')}</select></label><label class="f">By intent<select class="f" id="queueIntent" onchange="queueIntent=this.value;viewQueue()"><option value="">All intents</option>${boot.intents.map(i=>`<option value="${i.id}" ${i.id===queueIntent?'selected':''}>${esc(i.label)}</option>`).join('')}</select></label></div>
+ <div class="sla-toolbar"><label class="f">SLA health<select class="f" id="queueSla" onchange="queueSla=this.value;viewQueue()"><option value="">All SLA states</option>${['on_track','at_risk','breached','completed'].map(v=>`<option value="${v}" ${queueSla===v?'selected':''}>${v.replace('_',' ')}</option>`).join('')}</select></label><small>Calendar hours from creation. Check-in / LCD can shorten the deadline. Refreshes every minute.</small></div>
  <div class="queue">${shown.length?shown.map(ticketRow).join(''):'<div class="empty">No tickets in this view.</div>'}</div>`;
  renderWho();
 }
@@ -40,3 +42,4 @@ async function createThread(ev,id){ev.preventDefault();try{await api(`/tickets/$
 async function replyThread(ev,id,threadId){ev.preventDefault();try{await api(`/tickets/${id}/threads/${threadId}/messages`,{method:'POST',body:{body:document.getElementById('reply-'+threadId).value}});await appendCollaboration(id);document.querySelector(`[data-thread-id="${threadId}"]`)?.scrollIntoView({block:'center'});}catch(e){alert(e.message);}}
 
 route();
+setInterval(()=>{if(me()&&(!location.hash||location.hash==='#/queue'))viewQueue();},60000);

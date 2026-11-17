@@ -6,7 +6,7 @@ const { INTENTS } = require('./intent');
 
 const wipe = process.argv.includes('--wipe');
 if (wipe) {
-  for(const name of ['side_messages','side_recipients','side_threads','side_contacts','routing_audit','agent_profiles']) {
+  for(const name of ['ticket_feedback','side_messages','side_recipients','side_threads','side_contacts','routing_audit','agent_profiles']) {
     if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name)) db.exec('DELETE FROM '+name);
   }
   db.exec('DELETE FROM activity; DELETE FROM ticket_links; DELETE FROM tickets; DELETE FROM users; DELETE FROM agencies; DELETE FROM intents;');
@@ -33,6 +33,7 @@ insUser.run(5, 'Priya Menon', 'requester', 1);
 insUser.run(6, 'Omar Haddad', 'requester', 2);
 insUser.run(7, 'Ingrid Berg', 'requester', 3);
 
+const travelDate=days=>{const d=new Date();d.setUTCDate(d.getUTCDate()+days);return d.toISOString().slice(0,10);};
 const ins = db.prepare(`INSERT INTO tickets
   (id, title, description, agency_id, tboh, priority, intent_id, status, check_in_date, lcd_date, created_by, assigned_to, created_at, updated_at)
   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
@@ -40,27 +41,34 @@ const ins = db.prepare(`INSERT INTO tickets
 // The headline story: one refund, three separate contacts, same TBOH (PS Problem 1 example).
 ins.run(1001, 'Refund for cancelled Dubai city tour',
   'Booking TBOH-88213 was cancelled by the supplier on 10 Nov. Agency asked for a full refund of USD 420. No refund seen yet.',
-  1, 'TBOH-88213', 'P2', 'refund_delay', 'Open', '2026-11-21', '2026-11-20', 5, 1, '2026-11-12 09:20:00', '2026-11-12 09:41:00');
+  1, 'TBOH-88213', 'P2', 'refund_delay', 'Open', travelDate(4), travelDate(3), 5, 1, '2026-11-12 09:20:00', '2026-11-12 09:41:00');
 ins.run(1002, 'Follow-up: refund still not received',
   'Second contact for TBOH-88213. Agency says their client is asking daily. Supplier confirmed cancellation but refund not processed.',
-  1, 'TBOH-88213', 'P2', 'refund_delay', 'Pending', '2026-11-21', '2026-11-20', 5, 1, '2026-11-14 11:05:00', '2026-11-14 15:22:00');
+  1, 'TBOH-88213', 'P2', 'refund_delay', 'Pending', travelDate(4), travelDate(3), 5, 1, '2026-11-14 11:05:00', '2026-11-14 15:22:00');
 ins.run(1003, 'Third reminder: refund pending, travel in 4 days',
   'Third time writing about the same refund for TBOH-88213. Travel date is close and the agency is threatening to escalate to their TBO account manager.',
-  1, 'TBOH-88213', 'P1', 'refund_delay', 'New', '2026-11-21', '2026-11-20', 5, null, '2026-11-17 08:02:00', '2026-11-17 08:02:00');
+  1, 'TBOH-88213', 'P1', 'refund_delay', 'New', travelDate(4), travelDate(3), 5, null, '2026-11-17 08:02:00', '2026-11-17 08:02:00');
 
 // Mix of regions, priorities, intents.
 ins.run(1004, 'Card charged twice for hotel booking',
   'Desert Rose reports their card was charged twice for TBOH-90155 (Atlantis 2 nights). Need one charge reversed before their statement closes.',
-  2, 'TBOH-90155', 'P2', 'payment_issue', 'Open', '2026-11-25', null, 6, 2, '2026-11-15 13:44:00', '2026-11-16 10:12:00');
+  2, 'TBOH-90155', 'P2', 'payment_issue', 'Open', travelDate(8), null, 6, 2, '2026-11-15 13:44:00', '2026-11-16 10:12:00');
 ins.run(1005, 'Wheelchair assistance for airport transfer',
   'Passenger on TBOH-77041 needs a wheelchair-equipped transfer in Oslo on arrival. Supplier to confirm vehicle type.',
-  3, 'TBOH-77041', 'P3', 'special_request', 'Open', '2026-11-28', null, 7, 2, '2026-11-15 16:30:00', '2026-11-15 16:30:00');
+  3, 'TBOH-77041', 'P3', 'special_request', 'Open', travelDate(11), null, 7, 2, '2026-11-15 16:30:00', '2026-11-15 16:30:00');
 ins.run(1006, 'Hotel shows sold out but supplier confirms rooms',
-  'Skyline sees Marina Bay Residency as sold out on TBO for 18-20 Nov, but the supplier insists rooms are allocated. Looks like an inventory sync issue.',
-  1, 'TBOH-88410', 'P2', 'inventory_sync', 'New', '2026-11-18', null, 5, null, '2026-11-16 19:11:00', '2026-11-16 19:11:00');
+  'Skyline sees Marina Bay Residency as sold out on TBO for tomorrow through three days from now, but the supplier insists rooms are allocated. Looks like an inventory sync issue.',
+  1, 'TBOH-88410', 'P2', 'inventory_sync', 'New', travelDate(1), null, 5, null, '2026-11-16 19:11:00', '2026-11-16 19:11:00');
 ins.run(1007, 'Group cancellation, 12 pax, check-in this week',
-  'Desert Rose needs to cancel a 12-passenger group booking TBOH-90210 (Abu Dhabi hotels + transfers). Check-in is 19 Nov; wants cancellation terms confirmed first.',
-  2, 'TBOH-90210', 'P1', 'cancellation', 'New', '2026-11-19', '2026-11-18', 6, null, '2026-11-17 07:15:00', '2026-11-17 07:15:00');
+  'Desert Rose needs to cancel a 12-passenger group booking TBOH-90210 (Abu Dhabi hotels + transfers). Check-in is in two days; wants cancellation terms confirmed first.',
+  2, 'TBOH-90210', 'P1', 'cancellation', 'New', travelDate(2), travelDate(1), 6, null, '2026-11-17 07:15:00', '2026-11-17 07:15:00');
+
+// Keep a fresh seed useful for SLA review without changing existing databases.
+// Only the destructive --wipe reseeds. Relative examples illustrate all live states.
+for(const [id,hours] of [[1001,120],[1002,72],[1003,3.25],[1004,48],[1005,1],[1006,14],[1007,5]]){
+ const stamp=new Date(Date.now()-hours*3600000).toISOString().replace('T',' ').slice(0,19);
+ db.prepare('UPDATE tickets SET created_at=?,updated_at=? WHERE id=?').run(stamp,stamp,id);
+}
 
 // Activity trail for the seed story.
 logActivity(1001, 5, 'created', 'Priya Menon opened the ticket (Refund delay, P2)');

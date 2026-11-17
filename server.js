@@ -2,6 +2,7 @@ const express = require('express');
 const path = require('path');
 const { db, logActivity, linkTickets } = require('./db');
 const { INTENTS, suggestIntent } = require('./intent');
+const {sla}=require('./travel');
 
 const app = express();
 app.use(express.json({ limit: '256kb' }));
@@ -63,7 +64,7 @@ app.get('/api/tickets', currentUser, (req, res) => {
     SELECT t.id, t.title, t.agency_id, a.name AS agency_name, a.region AS agency_region,
            t.tboh, t.priority, t.intent_id, i.label AS intent_label, t.status,
            t.check_in_date, t.lcd_date, t.assigned_to, au.name AS assigned_to_name,
-           t.created_at, t.updated_at,
+           t.created_at, t.updated_at, t.completed_at,t.work_queue,
            (WITH RECURSIVE component(id) AS (
              SELECT t.id UNION
              SELECT CASE WHEN l.ticket_id=c.id THEN l.linked_ticket_id ELSE l.ticket_id END
@@ -85,6 +86,10 @@ app.get('/api/tickets', currentUser, (req, res) => {
   if(q.region)tickets=tickets.filter(t=>t.agency_region===q.region);
   if(q.intent)tickets=tickets.filter(t=>t.intent_id===q.intent);
   if(q.view==='linked')tickets=tickets.filter(t=>t.link_count>0);
+  if(q.view==='escalation')tickets=tickets.filter(t=>t.work_queue==='escalation');
+  if(q.view==='operations')tickets=tickets.filter(t=>t.work_queue==='operations');
+  tickets=tickets.map(t=>({...t,sla:sla(t)}));
+  if(q.sla)tickets=tickets.filter(t=>t.sla.state===q.sla);
   res.json({ tickets });
 });
 
@@ -167,8 +172,11 @@ app.get('/api/tickets/:id', currentUser, (req, res) => {
     SELECT ac.ticket_id, ac.type, ac.detail, ac.created_at, u.name AS actor_name, u.role AS actor_role
     FROM activity ac JOIN users u ON u.id = ac.actor_id
     WHERE ac.ticket_id IN (${[ticket.id, ...nodeIds].join(',')}) ORDER BY ac.created_at, ac.id`).all();
-  res.json({ ticket, links, timeline });
+  res.json({ ticket:{...ticket,sla:sla(ticket)}, links, timeline });
 });
+
+const {ownership} = require('./collaboration')(app,{currentUser,canSeeAll,getTicketScoped});
+const {escalate}=require('./travel').setup(app,{currentUser,canSeeAll,getTicketScoped,ownership});
 
 // --- Status flow: New -> Open -> Pending -> Escalated -> Resolved -> Closed ---
 app.post('/api/tickets/:id/status', currentUser, (req, res) => {
@@ -177,16 +185,16 @@ app.post('/api/tickets/:id/status', currentUser, (req, res) => {
   const next = String((req.body || {}).status || '');
   const note = String((req.body || {}).note || '').slice(0, 500);
   if (!STATUSES.includes(next)) return res.status(400).json({ error: `Status must be one of ${STATUSES.join(', ')}` });
+  if(next==='Escalated'){if(!canSeeAll(req.user))return res.status(403).json({error:'Only ops users escalate'});const r=escalate(ticket,req.user.id,note);return res.status(r.code||200).json(r);}
   if (next === ticket.status) return res.status(400).json({ error: `Already ${next}` });
-  db.prepare('UPDATE tickets SET status=?, updated_at=datetime(\'now\') WHERE id=?').run(next, ticket.id);
-  // Escalation is a first-class timeline event (PS MVP-1 lists escalations separately),
-  // not just another status change. Full escalation-manager routing lands with the SLA stage.
-  const type = next === 'Escalated' ? 'escalated' : 'status_changed';
+  db.prepare("UPDATE tickets SET status=?,completed_at=CASE WHEN ? IN('Resolved','Closed') THEN COALESCE(completed_at,datetime('now')) ELSE NULL END,updated_at=datetime('now') WHERE id=?").run(next,next,ticket.id);
+  // Escalated was handled above as an atomic EM handover.
+  const type = 'status_changed';
   logActivity(ticket.id, req.user.id, type, `${ticket.status} -> ${next}${note ? ': ' + note : ''}`);
   res.json({ id: ticket.id, status: next });
 });
 
-const {ownership} = require('./collaboration')(app,{currentUser,canSeeAll,getTicketScoped});
+
 // Manual assignment and automatic routing share one atomic ownership audit.
 app.post('/api/tickets/:id/assign', currentUser, (req,res)=>{
  if(!canSeeAll(req.user))return res.status(403).json({error:'Only ops users assign tickets'});

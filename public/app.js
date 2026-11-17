@@ -42,6 +42,7 @@ function ticketRow(t) {
         <span>${esc(t.agency_name)}</span>
         ${t.tboh ? `<span>${esc(t.tboh)}</span>` : ''}
         <span class="badge intent">${esc(t.intent_label)}</span>
+        ${t.sla ? slaBadge(t.sla) : ''}<span class="badge">${esc(t.work_queue||'operations')} queue</span>
         ${t.link_count ? `<span class="badge case">Case · ${t.link_count + 1}</span>` : ''}
         ${t.check_in_date ? `<span>Check-in ${fmtDate(t.check_in_date)}</span>` : ''}
         <span>${t.assigned_to_name ? '→ ' + esc(t.assigned_to_name) : 'Unassigned'}</span>
@@ -94,13 +95,16 @@ async function viewTicket(id) {
           <dt>Status</dt><dd><span class="status ${t.status}">${t.status}</span></dd>
           <dt>Check-in</dt><dd>${fmtDate(t.check_in_date)}</dd>
           <dt>Last cancel (LCD)</dt><dd>${fmtDate(t.lcd_date)}</dd>
+          <dt>SLA</dt><dd>${slaBadge(t.sla)}<br><small>Due ${esc(new Date(t.sla.deadline).toLocaleString('en-GB',{dateStyle:'medium',timeStyle:'short',timeZone:'UTC'})+' UTC')}</small></dd>
+          <dt>Queue</dt><dd>${esc(t.work_queue)}</dd>
           <dt>Owner</dt><dd>${esc(t.assigned_to_name) || 'Unassigned'}</dd>
         </dl>
         <p style="font-size:13px;color:var(--ink2);line-height:1.55">${esc(t.description)}</p>
+        <div class="sla-policy"><strong>Demo SLA policy</strong><p>${esc(t.sla.reason)}</p><small>${esc(t.sla.policy)}</small></div>
         <div class="error-box" id="routing-error" hidden></div>
         <div class="actions">
           <select class="f" id="statusSel" style="padding:7px 10px">
-            ${['Open', 'Pending', 'Escalated', 'Resolved', 'Closed'].filter(s => s !== t.status).map(s => `<option>${s}</option>`).join('')}
+            ${['Open', 'Pending', 'Resolved', 'Closed'].filter(s => s !== t.status).map(s => `<option>${s}</option>`).join('')}
           </select>
           <button class="btn" onclick="changeStatus(${t.id})">Move status</button>
           ${u.role !== 'requester' ? `
@@ -110,6 +114,7 @@ async function viewTicket(id) {
           </select>
           <input class="f" id="ownerReason" placeholder="Ownership reason" style="max-width:220px"><button class="btn" onclick="assign(${t.id})">Set owner</button><button class="btn" onclick="autoRoute(${t.id})">Auto-route</button>` : ''}
         </div>
+        ${u.role!=='requester'?`<div class="actions"><input class="f" id="escalationReason" placeholder="Reason for Escalation Manager" maxlength="500"><button class="btn danger" id="escalateBtn" onclick="escalateTicket(${t.id})">Escalate to Escalation Manager</button></div><div id="escalationError" class="error-box" hidden></div>`:''}
         <div class="actions">
           <select class="f" id="linkSel" style="padding:7px 10px">
             ${others.map(x => `<option value="${x.id}">${tid(x.id)} · ${esc(x.title.slice(0, 50))}</option>`).join('')}
@@ -142,9 +147,10 @@ async function viewTicket(id) {
           </ul>
         </div>
       </div>
-    </div><div id="collab" style="margin-top:18px"></div>`;
+    </div><div id="feedback" style="margin-top:18px"></div><div id="collab" style="margin-top:18px"></div>`;
   renderWho();
   await appendCollaboration(id);
+  if(u.role!=='requester')await renderFeedback(id);
 }
 
 async function viewNew() {
@@ -235,6 +241,7 @@ async function route() {
   const h = location.hash || '#/queue';
   if (!me()) return viewLogin();
   if (h.startsWith('#/ticket/')) return viewTicket(parseInt(h.split('/')[2], 10));
+  if (h === '#/insights') return viewInsights();
   if (h === '#/new') return viewNew();
   return viewQueue();
 }
