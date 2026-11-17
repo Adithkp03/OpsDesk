@@ -80,3 +80,5 @@ textarea.f { min-height: 110px; resize: vertical; }
 .login-card .lc-role { color: var(--ink2); font-size: 12px; margin-top: 3px; text-transform: capitalize; }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
 .link-case-banner { background: #eef2ff; border: 1px solid #d3ddfb; color: var(--blue); border-radius: 10px; padding: 10px 14px; font-size: 13px; margin-bottom: 14px; }
+
+.thread {border:1px solid var(--line);border-radius:8px;padding:16px;margin:18px 0;background:#fcfdfd}.audience {padding:8px;background:var(--teal-soft);font-size:12px;overflow-wrap:anywhere}.side-message{padding:12px 0;border-bottom:1px solid var(--line)}.side-message p{white-space:pre-wrap}.side-message small{color:var(--ink2)}.recipient{display:block;margin:8px 0}.recipient[hidden]{display:none}.new-thread{margin-top:24px}fieldset{border:1px solid var(--line);padding:12px;border-radius:8px}h2{font-size:20px}button{cursor:pointer}.chips{flex-wrap:wrap}

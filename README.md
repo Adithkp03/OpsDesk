@@ -4,9 +4,8 @@ Context-rich, travel-aware operations ticketing. Built for the TBO hackathon pro
 statement "OpsDesk for TBO(ZenDesk)": cases linked by agency, TBOH, intent and history,
 instead of isolated tickets.
 
-**Status: stage 1 of 7 (MVP-1, context-rich tickets + first-class linkage). Working and tested.**
-Later stages add routing, side conversations, travel-aware SLA/escalation, insights, data
-access and full role views. See the checklist below.
+**Status: MVP-1, MVP-2 and MVP-3 implemented and tested; four later stages remain.**
+Later stages add travel-aware SLA/escalation, insights, export and full role views. See the checklist below.
 
 ## Run it
 
@@ -21,7 +20,7 @@ npm start       # http://localhost:4173
 Run the checks:
 
 ```bash
-npm test        # 54 API smoke checks + real-process restart test against a temp database
+npm test        # 54 MVP-1 checks + 48 routing/conversation checks + real-process restart test against a temp database
 ```
 
 ## Demo users (demo auth, as the brief allows)
@@ -67,8 +66,8 @@ the server-side agency scoping is the part that carries over.
 | Brief requirement | Stage | Status |
 | --- | --- | --- |
 | MVP-1 Context-rich tickets, linkage, intent, status flow, timeline | 1 | Done |
-| MVP-2 Routing & ownership (region/time/priority/availability + reasons, queue views) | 2 | Planned |
-| MVP-3 Side conversations with explicit recipients surviving transfer | 3 | Planned |
+| MVP-2 Routing & ownership (region, availability, load + priority views and reasons) | 2 | Done |
+| MVP-3 Side conversations with explicit recipients surviving transfer | 3 | Done (external replies simulated) |
 | MVP-4 Travel-aware SLA + first-class escalation | 4 | Planned |
 | MVP-5 Theme tags + insights view | 5 | Planned |
 | MVP-6 Persistence, export, scale documentation | 6 | Persistence done in stage 1; export + docs planned |
@@ -87,7 +86,7 @@ the server-side agency scoping is the part that carries over.
 - Description, booking reference and travel dates may be omitted for enquiries before
   booking. Agency, title, priority and taxonomy choice are required. Dates, when
   supplied, must be real calendar dates, including valid leap years.
-- Simulated agent availability will land with the routing stage (brief-sanctioned).
+- Agent availability is simulated, toggled in the queue. No real staff presence is queried.
 
 ## API sketch
 
@@ -96,3 +95,40 @@ the server-side agency scoping is the part that carries over.
 `POST /api/tickets/:id/links` · `POST /api/intents/suggest`
 
 All ticket endpoints require the `X-User-Id` demo header and enforce agency scoping.
+
+## MVP-2: routing and ownership
+
+- Assign, reassign and explicitly unassign. Manual actions carry operator, time and an
+  optional explanation; every ownership write uses one atomic assignment/audit transaction.
+- Auto-route excludes unavailable agents, prefers matching agency region, then chooses
+  lowest active workload; stable agent-id tie-break. Ananya covers APAC, Rohit MEA/Europe.
+  No available agents returns 409 and preserves ownership. If the regional agent is away,
+  fallback is clearly recorded. Manual assignment may override availability deliberately.
+- Queue is P1/P2/P3-ranked. Region and availability are the two required routing signals;
+  load is an extra tie-break, priority ranks the queue. Time-window routing is not claimed.
+- Views: all tickets; triage (strictly unassigned); my queue; region; intent; linked tickets
+  opening their connected case. Composable filters retain agency scoping.
+- Routing and manual ownership reasons are displayed and stored with actor/time.
+
+## MVP-3: independent side-conversation audiences
+
+- Threads have a subject, immutable visibility and an explicit recipient list, not a
+  list derived from assignment or ticket group. New audience means a new thread.
+- Each message stores a snapshot of that thread's contact list. Assign/reassign/unassign
+  never edits recipients. A new owner can continue the same thread to the original list.
+- Internal notes accept ops recipients only and are readable only by ops demo roles.
+  External threads are readable/repliable by a requester only when explicitly addressed
+  and in the ticket's agency. Supplier-only threads are not exposed to agency requesters.
+- Side notes never enter the requester-visible shared case timeline. Threads remain on
+  their own ticket and are not copied into linked tickets. Cross-agency recipients denied.
+- All external replies and `.invalid` contacts are **simulations inside the app**. No SMTP,
+  real email, SMS or third-party message is sent. Recipient lists are observable in the UI.
+- Demo user selection is not production authentication. Internal-note isolation is verified
+  under the selected demo role; an attacker can impersonate a demo role via its header.
+
+### Stage 2+3 verification
+
+`npm test` includes 102 API regression checks plus a real Node-process restart test.
+The restart test verifies tickets, shared history, routing audit, availability and thread
+recipient/message snapshots. Reassignment tests include a new-owner reply and unassignment;
+privacy tests include list/read/write attacks, linked-ticket paths and audience injection.

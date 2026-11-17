@@ -6,6 +6,9 @@ const { INTENTS } = require('./intent');
 
 const wipe = process.argv.includes('--wipe');
 if (wipe) {
+  for(const name of ['side_messages','side_recipients','side_threads','side_contacts','routing_audit','agent_profiles']) {
+    if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name)) db.exec('DELETE FROM '+name);
+  }
   db.exec('DELETE FROM activity; DELETE FROM ticket_links; DELETE FROM tickets; DELETE FROM users; DELETE FROM agencies; DELETE FROM intents;');
 }
 if (db.prepare('SELECT COUNT(*) c FROM tickets').get().c > 0) {

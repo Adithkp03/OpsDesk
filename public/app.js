@@ -69,26 +69,6 @@ async function viewLogin() {
 }
 
 let queueFilter = 'all';
-async function viewQueue() {
-  const u = userById(me());
-  const { tickets } = await api('/tickets');
-  const statuses = ['all', 'New', 'Open', 'Pending', 'Escalated', 'Resolved', 'Closed'];
-  const shown = tickets.filter(t =>
-    queueFilter === 'all' ? true : queueFilter === 'mine' ? t.assigned_to === u.id : t.status === queueFilter);
-  $app.innerHTML = `
-    <div class="page-head">
-      <div><h1>${u.role === 'requester' ? esc(u.agency_name) + ' tickets' : 'Triage queue'}</h1>
-      <div class="sub">${shown.length} of ${tickets.length} tickets · cases link repeat contacts automatically</div></div>
-      <a class="btn primary" href="#/new">+ New ticket</a>
-    </div>
-    <div class="chips">
-      ${statuses.map(s => `<span class="chip ${queueFilter === s ? 'on' : ''}" onclick="queueFilter='${s}';viewQueue()">${s === 'all' ? 'All' : s}</span>`).join('')}
-      ${u.role !== 'requester' ? `<span class="chip ${queueFilter === 'mine' ? 'on' : ''}" onclick="queueFilter='mine';viewQueue()">My queue</span>` : ''}
-    </div>
-    <div class="queue">${shown.length ? shown.map(ticketRow).join('') : '<div class="empty">No tickets in this view.</div>'}</div>`;
-  renderWho();
-}
-
 async function viewTicket(id) {
   const u = userById(me());
   let data;
@@ -127,7 +107,7 @@ async function viewTicket(id) {
             <option value="">Unassigned</option>
             ${opsUsers.map(x => `<option value="${x.id}" ${t.assigned_to === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}
           </select>
-          <button class="btn" onclick="assign(${t.id})">Set owner</button>` : ''}
+          <input class="f" id="ownerReason" placeholder="Ownership reason" style="max-width:220px"><button class="btn" onclick="assign(${t.id})">Set owner</button><button class="btn" onclick="autoRoute(${t.id})">Auto-route</button>` : ''}
         </div>
         <div class="actions">
           <select class="f" id="linkSel" style="padding:7px 10px">
@@ -161,8 +141,9 @@ async function viewTicket(id) {
           </ul>
         </div>
       </div>
-    </div>`;
+    </div><div id="collab" style="margin-top:18px"></div>`;
   renderWho();
+  await appendCollaboration(id);
 }
 
 async function viewNew() {
@@ -238,11 +219,6 @@ async function changeStatus(id) {
   await api(`/tickets/${id}/status`, { method: 'POST', body: { status, note } });
   viewTicket(id);
 }
-async function assign(id) {
-  const v = document.getElementById('assignSel').value;
-  await api(`/tickets/${id}/assign`, { method: 'POST', body: { agent_id: v === '' ? null : parseInt(v, 10) } });
-  viewTicket(id);
-}
 async function addLink(id) {
   const other = parseInt(document.getElementById('linkSel').value, 10);
   const reason = document.getElementById('linkReason').value;
@@ -262,4 +238,3 @@ async function route() {
   return viewQueue();
 }
 window.addEventListener('hashchange', route);
-route();

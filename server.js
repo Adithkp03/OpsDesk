@@ -78,7 +78,14 @@ app.get('/api/tickets', currentUser, (req, res) => {
     ${scoped ? '' : 'WHERE t.agency_id = @agency_id'}
     ORDER BY CASE t.priority WHEN 'P1' THEN 0 WHEN 'P2' THEN 1 ELSE 2 END, t.updated_at DESC
   `).all(scoped ? {} : { agency_id: req.user.agency_id });
-  res.json({ tickets: rows });
+  let tickets=rows;
+  const q=req.query;
+  if(q.view==='triage')tickets=tickets.filter(t=>t.assigned_to===null);
+  if(q.view==='mine')tickets=tickets.filter(t=>t.assigned_to===req.user.id);
+  if(q.region)tickets=tickets.filter(t=>t.agency_region===q.region);
+  if(q.intent)tickets=tickets.filter(t=>t.intent_id===q.intent);
+  if(q.view==='linked')tickets=tickets.filter(t=>t.link_count>0);
+  res.json({ tickets });
 });
 
 // --- Create ticket: validates input, auto-links by TBOH/agency/intent, logs activity ---
@@ -179,22 +186,19 @@ app.post('/api/tickets/:id/status', currentUser, (req, res) => {
   res.json({ id: ticket.id, status: next });
 });
 
-// --- Assignment (basic ownership now; routing engine is a later MVP) ---
-app.post('/api/tickets/:id/assign', currentUser, (req, res) => {
-  if (!canSeeAll(req.user)) return res.status(403).json({ error: 'Only ops users assign tickets' });
-  const { ticket, error } = getTicketScoped(req, parseInt(req.params.id, 10));
-  if (error) return res.status(404).json({ error: 'Ticket not found' });
-  const agentId = (req.body || {}).agent_id;
-  if (agentId === null) {
-    db.prepare('UPDATE tickets SET assigned_to=NULL, updated_at=datetime(\'now\') WHERE id=?').run(ticket.id);
-    logActivity(ticket.id, req.user.id, 'assigned', 'Unassigned');
-    return res.json({ id: ticket.id, assigned_to: null });
-  }
-  const agent = db.prepare('SELECT * FROM users WHERE id=? AND role IN (\'agent\',\'em\',\'lead\')').get(parseInt(agentId, 10));
-  if (!agent) return res.status(400).json({ error: 'Choose a valid ops user' });
-  db.prepare('UPDATE tickets SET assigned_to=?, updated_at=datetime(\'now\') WHERE id=?').run(agent.id, ticket.id);
-  logActivity(ticket.id, req.user.id, 'assigned', `Assigned to ${agent.name}`);
-  res.json({ id: ticket.id, assigned_to: agent.id, assigned_to_name: agent.name });
+const {ownership} = require('./collaboration')(app,{currentUser,canSeeAll,getTicketScoped});
+// Manual assignment and automatic routing share one atomic ownership audit.
+app.post('/api/tickets/:id/assign', currentUser, (req,res)=>{
+ if(!canSeeAll(req.user))return res.status(403).json({error:'Only ops users assign tickets'});
+ const {ticket:t,error}=getTicketScoped(req,Number(req.params.id));
+ if(error)return res.status(error).json({error:'Ticket not accessible'});
+ const b=req.body||{},id=b.agent_id;
+ const target=id===null?null:db.prepare("SELECT * FROM users WHERE id=? AND role IN('agent','em','lead')").get(Number(id));
+ if(id!==null&&!target)return res.status(400).json({error:'Choose an ops owner or explicit null to unassign'});
+ const action=id===null?'Unassigned':`${t.assigned_to?'Reassigned':'Assigned'} to ${target.name}`;
+ const reason=`${action}; manual by ${req.user.name}${typeof b.reason==='string'&&b.reason.trim()?': '+b.reason.trim().slice(0,300):''}`;
+ ownership(t,id===null?null:target.id,req.user.id,reason);
+ res.json({id:t.id,assigned_to:id===null?null:target.id,assigned_to_name:target?.name||null,reason});
 });
 
 // --- Manual link ---
