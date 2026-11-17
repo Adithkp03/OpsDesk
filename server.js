@@ -3,9 +3,11 @@ const path = require('path');
 const { db, logActivity, linkTickets } = require('./db');
 const { INTENTS, suggestIntent } = require('./intent');
 const {sla}=require('./travel');
+const {isOps,canRead,scope}=require('./access');
 
 const app = express();
 app.use(express.json({ limit: '256kb' }));
+app.use('/api',(req,res,next)=>{res.set('Cache-Control','no-store');next();});
 app.use(express.static(path.join(__dirname, 'public')));
 
 const STATUSES = ['New', 'Open', 'Pending', 'Escalated', 'Resolved', 'Closed'];
@@ -13,14 +15,15 @@ const PRIORITIES = ['P1', 'P2', 'P3'];
 
 // --- Demo auth (PS MVP-7 allows demo auth; full role model lands with its stage) ---
 function currentUser(req, res, next) {
-  const id = parseInt(req.header('X-User-Id') || '', 10);
+  const raw=req.header('X-User-Id')||'';
+  const id = /^[1-9]\d*$/.test(raw)?Number(raw):null;
   if (!id) return res.status(401).json({ error: 'Missing X-User-Id demo header' });
   const user = db.prepare('SELECT u.*, a.name AS agency_name FROM users u LEFT JOIN agencies a ON a.id=u.agency_id WHERE u.id=?').get(id);
   if (!user) return res.status(401).json({ error: 'Unknown demo user' });
   req.user = user;
   next();
 }
-const canSeeAll = (u) => u.role === 'agent' || u.role === 'em' || u.role === 'lead';
+const canSeeAll = isOps;
 
 function getTicketScoped(req, id) {
   const t = db.prepare(`
@@ -33,7 +36,7 @@ function getTicketScoped(req, id) {
     LEFT JOIN users au ON au.id = t.assigned_to
     WHERE t.id = ?`).get(id);
   if (!t) return { error: 404 };
-  if (!canSeeAll(req.user) && t.agency_id !== req.user.agency_id) return { error: 403 };
+  if (!canRead(req.user,t)) return { error: 403 };
   return { ticket: t };
 }
 
@@ -59,26 +62,26 @@ app.post('/api/intents/suggest', currentUser, (req, res) => {
 
 // --- Queue ---
 app.get('/api/tickets', currentUser, (req, res) => {
-  const scoped = canSeeAll(req.user);
+  const access=scope(req.user),peerAccess=scope(req.user,'peer');
   const rows = db.prepare(`
     SELECT t.id, t.title, t.agency_id, a.name AS agency_name, a.region AS agency_region,
            t.tboh, t.priority, t.intent_id, i.label AS intent_label, t.status,
            t.check_in_date, t.lcd_date, t.assigned_to, au.name AS assigned_to_name,
-           t.created_at, t.updated_at, t.completed_at,t.work_queue,
+           t.created_at, t.updated_at, t.completed_at,t.work_queue,t.created_by,
            (WITH RECURSIVE component(id) AS (
              SELECT t.id UNION
              SELECT CASE WHEN l.ticket_id=c.id THEN l.linked_ticket_id ELSE l.ticket_id END
              FROM component c JOIN ticket_links l ON l.ticket_id=c.id OR l.linked_ticket_id=c.id
              JOIN tickets peer ON peer.id=CASE WHEN l.ticket_id=c.id THEN l.linked_ticket_id ELSE l.ticket_id END
-             WHERE peer.agency_id=t.agency_id
+             WHERE peer.agency_id=t.agency_id AND ${peerAccess.sql}
            ) SELECT COUNT(*)-1 FROM component) AS link_count
     FROM tickets t
     JOIN agencies a ON a.id = t.agency_id
     JOIN intents i ON i.id = t.intent_id
     LEFT JOIN users au ON au.id = t.assigned_to
-    ${scoped ? '' : 'WHERE t.agency_id = @agency_id'}
+    WHERE ${access.sql}
     ORDER BY CASE t.priority WHEN 'P1' THEN 0 WHEN 'P2' THEN 1 ELSE 2 END, t.updated_at DESC
-  `).all(scoped ? {} : { agency_id: req.user.agency_id });
+  `).all(access.params);
   let tickets=rows;
   const q=req.query;
   if(q.view==='triage')tickets=tickets.filter(t=>t.assigned_to===null);
@@ -95,6 +98,7 @@ app.get('/api/tickets', currentUser, (req, res) => {
 
 // --- Create ticket: validates input, auto-links by TBOH/agency/intent, logs activity ---
 app.post('/api/tickets', currentUser, (req, res) => {
+  if(req.user.role==='em')return res.status(403).json({error:'Escalation Managers work the escalation queue; agents and requesters create tickets'});
   const b = req.body || {};
   const title = String(b.title || '').trim();
   const description = String(b.description || '').trim();
@@ -134,34 +138,36 @@ app.post('/api/tickets', currentUser, (req, res) => {
   for (const m of db.prepare('SELECT id FROM tickets WHERE agency_id=? AND intent_id=? AND id<>?').all(agencyId, intent.id, id)) {
     if (linkTickets(id, m.id, `Same agency + intent (${intent.label})`, req.user.id)) linked.push({ id: m.id, reason: `Same agency + intent (${intent.label})` });
   }
-  res.status(201).json({ id, linked });
+  res.status(201).json({ id, linked:linked.filter(l=>canRead(req.user,db.prepare('SELECT * FROM tickets WHERE id=?').get(l.id))) });
 });
 
 // --- Ticket detail with case view + timeline ---
 app.get('/api/tickets/:id', currentUser, (req, res) => {
   const { ticket, error } = getTicketScoped(req, parseInt(req.params.id, 10));
-  if (error) return res.status(error).json({ error: error === 404 ? 'Ticket not found' : 'Not your agency\'s ticket' });
+  if (error) return res.status(error).json({ error: error === 404 ? 'Ticket not found' : 'Ticket not accessible to this role' });
   // One case = the connected component of the link graph (A-B and B-C means A, B, C
   // share a case), not only directly linked pairs. Requesters never see nodes or edges
   // belonging to another agency, even if a link somehow exists.
-  const visibleAll = canSeeAll(req.user);
+  
   const seen = new Set([ticket.id]);
   const queue = [ticket.id];
   const edgeMap = new Map();
   while (queue.length) {
     const cur = queue.shift();
     for (const e of db.prepare('SELECT * FROM ticket_links WHERE ticket_id=? OR linked_ticket_id=?').all(cur, cur)) {
-      edgeMap.set(e.id, e);
       const other = e.ticket_id === cur ? e.linked_ticket_id : e.ticket_id;
+      const peer=db.prepare('SELECT * FROM tickets WHERE id=?').get(other);
+      if(!peer||peer.agency_id!==ticket.agency_id||!canRead(req.user,peer))continue;
+      edgeMap.set(e.id,e);
       if (!seen.has(other)) { seen.add(other); queue.push(other); }
     }
   }
   const nodeRows = seen.size > 1 ? db.prepare(`
-    SELECT o.id, o.title, o.status, o.priority, o.tboh, o.agency_id, o.created_at,
+    SELECT o.id, o.title, o.status, o.priority, o.tboh, o.agency_id, o.created_by,o.work_queue,o.created_at,
            i.label AS intent_label, au.name AS assigned_to_name
     FROM tickets o JOIN intents i ON i.id = o.intent_id LEFT JOIN users au ON au.id = o.assigned_to
     WHERE o.id IN (${[...seen].join(',')}) ORDER BY o.created_at`).all() : [];
-  const nodes = nodeRows.filter(o => o.id !== ticket.id && (visibleAll || o.agency_id === req.user.agency_id));
+  const nodes = nodeRows.filter(o => o.id !== ticket.id && canRead(req.user,o));
   const nodeIds = new Set(nodes.map(n => n.id));
   const edges = [...edgeMap.values()].filter(e => (e.ticket_id === ticket.id || nodeIds.has(e.ticket_id)) && (e.linked_ticket_id === ticket.id || nodeIds.has(e.linked_ticket_id)));
   const links = nodes.map(n => ({
@@ -172,7 +178,8 @@ app.get('/api/tickets/:id', currentUser, (req, res) => {
     SELECT ac.ticket_id, ac.type, ac.detail, ac.created_at, u.name AS actor_name, u.role AS actor_role
     FROM activity ac JOIN users u ON u.id = ac.actor_id
     WHERE ac.ticket_id IN (${[ticket.id, ...nodeIds].join(',')}) ORDER BY ac.created_at, ac.id`).all();
-  res.json({ ticket:{...ticket,sla:sla(ticket)}, links, timeline });
+  const visibleTimeline=timeline.filter(e=>{if(e.type!=='linked')return true;const m=e.detail.match(/Linked to T-(\d+)/);if(!m)return false;const other=db.prepare('SELECT * FROM tickets WHERE id=?').get(Number(m[1]));return other&&canRead(req.user,other);});
+  res.json({ ticket:{...ticket,sla:sla(ticket)}, links, timeline:visibleTimeline });
 });
 
 const {ownership} = require('./collaboration')(app,{currentUser,canSeeAll,getTicketScoped});
@@ -180,6 +187,7 @@ const {escalate}=require('./travel').setup(app,{currentUser,canSeeAll,getTicketS
 
 // --- Status flow: New -> Open -> Pending -> Escalated -> Resolved -> Closed ---
 app.post('/api/tickets/:id/status', currentUser, (req, res) => {
+  if(!isOps(req.user))return res.status(403).json({error:'Only ops users change status'});
   const { ticket, error } = getTicketScoped(req, parseInt(req.params.id, 10));
   if (error) return res.status(error).json({ error: 'Ticket not found or not accessible' });
   const next = String((req.body || {}).status || '');
@@ -211,6 +219,7 @@ app.post('/api/tickets/:id/assign', currentUser, (req,res)=>{
 
 // --- Manual link ---
 app.post('/api/tickets/:id/links', currentUser, (req, res) => {
+  if(!isOps(req.user))return res.status(403).json({error:'Only ops users link tickets'});
   const { ticket, error } = getTicketScoped(req, parseInt(req.params.id, 10));
   if (error) return res.status(error).json({ error: 'Ticket not found or not accessible' });
   const otherId = parseInt((req.body || {}).ticket_id, 10);
@@ -218,10 +227,12 @@ app.post('/api/tickets/:id/links', currentUser, (req, res) => {
   const other = db.prepare('SELECT * FROM tickets WHERE id=?').get(otherId);
   if (!other || other.id === ticket.id) return res.status(400).json({ error: 'Choose another existing ticket' });
   if (other.agency_id !== ticket.agency_id) return res.status(400).json({ error: 'Cases stay within one agency: cross-agency links would leak data between agencies' });
-  if (!canSeeAll(req.user) && other.agency_id !== req.user.agency_id) return res.status(403).json({ error: 'Not your agency\'s ticket' });
+  if (!canRead(req.user,other)) return res.status(403).json({ error: 'Not your agency\'s ticket' });
   linkTickets(ticket.id, other.id, reason, req.user.id);
   res.json({ id: ticket.id, linked_to: other.id, reason });
 });
+
+require('./data-access')(app,{currentUser});
 
 const PORT = process.env.PORT || 4173;
 if (require.main === module) {

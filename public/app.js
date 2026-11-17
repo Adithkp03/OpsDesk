@@ -3,7 +3,7 @@
    ?as=<userId> preselects a demo user (documented demo convenience, not security). */
 const $app = document.getElementById('app');
 const $who = document.getElementById('whoami');
-let boot = null;
+let boot = null,preselected=false;
 
 function me() { return parseInt(localStorage.getItem('opsdesk_user') || '', 10) || null; }
 function setMe(id) { id ? localStorage.setItem('opsdesk_user', id) : localStorage.removeItem('opsdesk_user'); }
@@ -27,9 +27,9 @@ const userById = (id) => (boot.users.find(u => u.id === id) || {});
 
 function renderWho() {
   const u = userById(me());
-  $who.innerHTML = u
+  $who.innerHTML = u.role
     ? `<span><strong>${esc(u.name)}</strong> · ${u.role === 'requester' ? 'Agency: ' + esc(u.agency_name) : u.role.toUpperCase()}</span>
-       <button class="btn small" onclick="setMe(null);route()">Switch user</button>`
+       <button class="btn small" onclick="setMe(null);preselected=true;history.replaceState(null,'',location.pathname+location.hash);route()">Switch user</button>`
     : '';
 }
 
@@ -57,7 +57,7 @@ async function viewLogin() {
   const groups = [['agent', 'Ops agents'], ['em', 'Escalation manager'], ['lead', 'Ops lead'], ['requester', 'Agency requesters']];
   $app.innerHTML = `<div class="login-wrap">
     <h1>Choose a demo user</h1>
-    <p class="sub" style="color:var(--ink2)">Demo auth for the hackathon, as the brief allows. Requesters only see their own agency's tickets.</p>
+    <p class="sub" style="color:var(--ink2)">Demo auth for the hackathon, as the brief allows. Requesters see only tickets they created. Agents see org queues; Escalation Managers see the escalation queue; leads get org reporting. All names and accounts are synthetic.</p>
     ${groups.map(([role, label]) => `
       <p class="section-title" style="margin-top:18px">${label}</p>
       <div class="login-grid">${boot.users.filter(u => u.role === role).map(u => `
@@ -102,26 +102,25 @@ async function viewTicket(id) {
         <p style="font-size:13px;color:var(--ink2);line-height:1.55">${esc(t.description)}</p>
         <div class="sla-policy"><strong>Demo SLA policy</strong><p>${esc(t.sla.reason)}</p><small>${esc(t.sla.policy)}</small></div>
         <div class="error-box" id="routing-error" hidden></div>
-        <div class="actions">
+        ${u.role!=='requester'?`<div class="actions">
           <select class="f" id="statusSel" style="padding:7px 10px">
             ${['Open', 'Pending', 'Resolved', 'Closed'].filter(s => s !== t.status).map(s => `<option>${s}</option>`).join('')}
           </select>
           <button class="btn" onclick="changeStatus(${t.id})">Move status</button>
-          ${u.role !== 'requester' ? `
           <select class="f" id="assignSel" style="padding:7px 10px">
             <option value="">Unassigned</option>
             ${opsUsers.map(x => `<option value="${x.id}" ${t.assigned_to === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}
           </select>
-          <input class="f" id="ownerReason" placeholder="Ownership reason" style="max-width:220px"><button class="btn" onclick="assign(${t.id})">Set owner</button><button class="btn" onclick="autoRoute(${t.id})">Auto-route</button>` : ''}
+          <input class="f" id="ownerReason" placeholder="Ownership reason" style="max-width:220px"><button class="btn" onclick="assign(${t.id})">Set owner</button><button class="btn" onclick="autoRoute(${t.id})" ${u.role==='em'?'hidden':''}>Auto-route</button>
         </div>
-        ${u.role!=='requester'?`<div class="actions"><input class="f" id="escalationReason" placeholder="Reason for Escalation Manager" maxlength="500"><button class="btn danger" id="escalateBtn" onclick="escalateTicket(${t.id})">Escalate to Escalation Manager</button></div><div id="escalationError" class="error-box" hidden></div>`:''}
+        <div class="actions"><input class="f" id="escalationReason" placeholder="Reason for Escalation Manager" maxlength="500"><button class="btn danger" id="escalateBtn" onclick="escalateTicket(${t.id})">Escalate to Escalation Manager</button></div><div id="escalationError" class="error-box" hidden></div>
         <div class="actions">
           <select class="f" id="linkSel" style="padding:7px 10px">
             ${others.map(x => `<option value="${x.id}">${tid(x.id)} · ${esc(x.title.slice(0, 50))}</option>`).join('')}
           </select>
           <input class="f" id="linkReason" placeholder="Link reason (e.g. same supplier issue)" style="padding:7px 10px">
           <button class="btn" onclick="addLink(${t.id})">Link ticket</button>
-        </div>
+        </div>`:''}
       </div>
       <div>
         <div class="card" style="margin-bottom:16px">
@@ -155,6 +154,7 @@ async function viewTicket(id) {
 
 async function viewNew() {
   const u = userById(me());
+  if(u.role==='em'){$app.innerHTML='<div class="empty">Escalation Managers work tickets handed to the escalation queue. <a href="#/queue">Back to queue</a></div>';return;}
   const isRequester = u.role === 'requester';
   $app.innerHTML = `
     <div class="page-head"><div><h1>New ticket</h1>
@@ -235,12 +235,15 @@ async function addLink(id) {
 
 async function route() {
   const qs = new URLSearchParams(location.search);
-  if (qs.get('as')) { setMe(parseInt(qs.get('as'), 10)); }
+  if (!preselected&&qs.get('as')) { setMe(parseInt(qs.get('as'), 10)); }
+  preselected=true;
   if (!boot) boot = await api('/bootstrap');
   renderWho();
   const h = location.hash || '#/queue';
   if (!me()) return viewLogin();
   if (h.startsWith('#/ticket/')) return viewTicket(parseInt(h.split('/')[2], 10));
+  if (h === '#/lead') return viewLead();
+  if (h === '#/data') return viewDataPolicy();
   if (h === '#/insights') return viewInsights();
   if (h === '#/new') return viewNew();
   return viewQueue();

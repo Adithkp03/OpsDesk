@@ -16,14 +16,14 @@ module.exports=(app,{currentUser,canSeeAll,getTicketScoped})=>{
  function ownership(t,newId,actor,reason,writeActivity=true){
   db.transaction(()=>{db.prepare("UPDATE tickets SET assigned_to=?,work_queue=CASE WHEN (SELECT role FROM users WHERE id=?)='em' THEN 'escalation' ELSE 'operations' END,updated_at=datetime('now') WHERE id=?").run(newId,newId,t.id);db.prepare('INSERT INTO routing_audit(ticket_id,actor_id,old_owner,new_owner,reason) VALUES(?,?,?,?,?)').run(t.id,actor,t.assigned_to,newId,reason);if(writeActivity)logActivity(t.id,actor,'assigned',reason);})();
  }
- app.get('/api/routing/agents',currentUser,(req,res)=>{if(ops(req,res))res.json({agents:profiles(),simulation:true});});
+ app.get('/api/routing/agents',currentUser,(req,res)=>{if(req.user.role==='em')return res.status(403).json({error:'Agent availability management is for agents and leads'});if(ops(req,res))res.json({agents:profiles(),simulation:true});});
  app.post('/api/routing/agents/:agentId',currentUser,(req,res)=>{
-  if(!ops(req,res))return;const p=profiles().find(x=>x.user_id===Number(req.params.agentId));if(!p)return res.status(404).json({error:'Agent not found'});
+  if(!ops(req,res))return;if(req.user.role==='em')return res.status(403).json({error:'Agent availability management is for agents and leads'});const p=profiles().find(x=>x.user_id===Number(req.params.agentId));if(!p)return res.status(404).json({error:'Agent not found'});
   if(typeof (req.body||{}).available!=='boolean')return res.status(400).json({error:'available must be true or false'});
   db.prepare('UPDATE agent_profiles SET available=? WHERE user_id=?').run(+req.body.available,p.user_id);res.json({simulation:true,agents:profiles()});
  });
  app.post('/api/tickets/:id/route',currentUser,(req,res)=>{
-  if(!ops(req,res))return;const t=ticket(req,res);if(!t)return;
+  if(!ops(req,res))return;if(req.user.role==='em')return res.status(403).json({error:'Only agents and leads auto-route'});const t=ticket(req,res);if(!t)return;
   const agents=profiles().filter(a=>a.available).sort((a,b)=>Number(b.regions.includes(t.agency_region))-Number(a.regions.includes(t.agency_region))||a.load-b.load||a.user_id-b.user_id);
   if(!agents.length)return res.status(409).json({error:'No available agents. Ownership unchanged.'});
   const a=agents[0];const reason=`Auto-route: ${t.agency_region} ${a.regions.includes(t.agency_region)?'region match':'region fallback (no available regional agent)'}; available; ${t.priority} priority; active load ${a.load}; owner ${a.name}`;

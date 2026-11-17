@@ -4,8 +4,7 @@ Context-rich, travel-aware operations ticketing. Built for the TBO hackathon pro
 statement "OpsDesk for TBO(ZenDesk)": cases linked by agency, TBOH, intent and history,
 instead of isolated tickets.
 
-**Status: MVP-1 through MVP-5 implemented and tested; MVP-6 and MVP-7 remain.**
-Later stages add export/scale documentation and full role views. See the checklist below.
+**Status: MVP-1 through MVP-7 implemented and tested.** See the checklist below.
 
 ## Run it
 
@@ -20,7 +19,7 @@ npm start       # http://localhost:4173
 Run the checks:
 
 ```bash
-npm test        # 54 MVP-1 + 48 routing/conversation + 71 SLA/insight checks + real-process restart test
+npm test        # 259 checks (54 MVP-1 + 48 routing/conversation + 71 SLA/insight + 86 data-access) + real-process restart test
 ```
 
 ## Demo users (demo auth, as the brief allows)
@@ -33,9 +32,9 @@ the server-side agency scoping is the part that carries over.
 | User | Role | Sees |
 | --- | --- | --- |
 | Ananya Rao, Rohit Sharma | Agent | All org queues |
-| Meera Iyer | Escalation Manager | Escalation queue, My queue and org queues; receives first-class escalation handovers |
-| Arjun Nair | Lead | All queues |
-| Priya Menon / Omar Haddad / Ingrid Berg | Requester | Only their own agency's tickets |
+| Meera Iyer | Escalation Manager | Only the escalation queue: tickets explicitly handed over to her, including their allowed linked history |
+| Arjun Nair | Lead | All org queues plus the lead overview (org-wide metrics and reporting) |
+| Priya Menon / Omar Haddad / Ingrid Berg | Requester | Only tickets they created within their own agency, plus linked history they are allowed to see |
 
 ## What stage 1 proves (Problem 1 in the brief)
 
@@ -70,8 +69,8 @@ the server-side agency scoping is the part that carries over.
 | MVP-3 Side conversations with explicit recipients surviving transfer | 3 | Done (external replies simulated) |
 | MVP-4 Travel-aware SLA + first-class escalation | 4 | Done (explicit demo SLA policy) |
 | MVP-5 Theme tags + insights view | 5 | Done (tagged insights; optional AI stretch not included) |
-| MVP-6 Persistence, export, scale documentation | 6 | Persistence done in stage 1; export + docs planned |
-| MVP-7 Roles & access | 7 | Demo auth + requester scoping in stage 1; full role views planned |
+| MVP-6 Persistence, export, scale documentation | 6 | Done (streaming CSV without row cutoff; retention/scale design below) |
+| MVP-7 Roles & access | 7 | Done (role table enforced at the API, not just hidden UI) |
 
 ## Stack and assumptions
 
@@ -204,3 +203,69 @@ escalation owner/queue, fixed deadlines, feedback themes, product reference and 
 The moving SLA countdown/evaluation time is intentionally excluded from restart equality.
 Actual Chrome UI verification also exercises health filters, escalation reason/owner/queue,
 EM's queue, save/reopen tags, insight sample navigation and requester denial.
+
+## MVP-6: persistence, export and scale
+
+- Durable local SQLite storage (since stage 1): startup never reseeds or clears the
+  database, and a full OS-process restart preserves tickets, cases, conversations,
+  audit, escalation state and feedback. Verified by an independent restart test.
+- **Export matching tickets** streams a real CSV using the current region, intent,
+  status, queue and SLA-health filters. The active filters are recorded in header
+  comment lines at the top of the file.
+- **No row cutoff.** The regression test exports 3513 synthetic tickets including the
+  last row, with unique identifiers. The CSV is streamed, not buffered in memory.
+- Spreadsheet formula prefixes (`=`, `+`, `-`, `@` and leading-whitespace variants)
+  are neutralized so opening the CSV in Excel/LibreOffice cannot execute a cell.
+- Exports exclude side-conversation bodies and feedback product references. Ticket
+  descriptions are included and may contain private data: protect exported files.
+- Retention policy, stated in-app at `#/data` (`GET /api/data-policy`): **no automatic
+  expiry, deletion or archival**. Resolved and Closed are workflow states, not an
+  archive tier. Data remains until the local owner deliberately removes the database
+  or runs the documented destructive seed reset.
+- Backups: stop the app and copy the database plus any `-wal`/`-shm` files together,
+  or use the SQLite backup API. Protect backups and exports; no cloud backup exists.
+- **Scale design path** (documented design, not a performance claim): SQLite is a
+  single-process demo store, not a production 50K-row or near-real-time guarantee.
+  A production deployment would use scheduled snapshot export jobs instead of
+  interactive full exports, keyset (cursor) pagination instead of OFFSET for large
+  queues and APIs, a change-data-capture feed or transactional outbox table for
+  near-real-time downstream updates, and object storage (e.g. S3) for large export
+  artifacts with time-limited download URLs. Retention tiers and the existing
+  API-enforced access scoping carry over unchanged.
+
+## MVP-7: roles and access (enforced at the API)
+
+The UI hides controls a role cannot use, but every rule below is enforced by the
+server on each request, so URL guessing and header replay cannot bypass it:
+
+- **Requester**: reads only tickets they created within their own agency, including
+  linked history they are allowed to see. Cannot change status, assign, link,
+  escalate, edit themes, view insights or export operations data. A same-agency
+  colleague's ticket is not automatically shared. Existing external-thread recipient
+  checks still apply and internal notes remain hidden.
+- **Escalation Manager**: sees only escalation-queue tickets. Receives tickets through
+  the explicit handover, can work them and use escalation actions, and exports only
+  that queue. Direct URLs to ordinary tickets, org queues, the lead overview and
+  insights are denied; linked history cannot reveal tickets outside her scope.
+  Handing a ticket back to operations removes her access to it.
+- **Agent**: all org queues and ticket work; no lead overview.
+- **Lead**: all org queues plus `#/lead` (`GET /api/lead`): org-wide ticket totals,
+  active unassigned work, escalation load, service-risk (SLA) counts, and status and
+  region breakdowns that link back to the filtered org queues and weekly insights.
+- The `X-User-Id` demo header is validated against real seeded users on every
+  request; unknown ids are rejected. `/api` responses are `no-store`.
+- Demo auth remains an explicitly selectable identity, as the brief allows: an
+  attacker can impersonate a demo role via its header. This is not production
+  authentication.
+
+### Stage 6+7 verification
+
+`npm test`: **259 checks** (54 + 48 + 71 + 86 new data-access checks), plus the
+independent real-process restart test. New coverage includes large export without
+cutoff (3513 rows including the last row), scope headers, formula escaping, requester
+creator+agency scoping, same-agency colleague privacy, EM escalation-only scope across
+queues/detail/insights/export/case traversal, role change after hand-back, lead
+overview access, and demo-header validation. Restart re-verifies the original state.
+Actual Chrome verification adds 23 checks: lead metrics, real CSV download, refresh
+persistence, retention page, EM scope and denials, requester scope and hidden
+controls, agent lead denial and user switching.
