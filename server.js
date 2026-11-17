@@ -237,6 +237,16 @@ require('./data-access')(app,{currentUser});
 
 const PORT = process.env.PORT || 4173;
 if (require.main === module) {
-  app.listen(PORT, () => console.log(`OpsDesk listening on http://localhost:${PORT}`));
+  app.listen(PORT, () => {
+    const { MODE } = require('./auth');
+    if (MODE === 'firebase') {
+      console.log(`OpsDesk listening on http://localhost:${PORT}`);
+      console.log('[auth] SECURED mode: Firebase-verified sign-in required; X-User-Id demo header is rejected.');
+    } else {
+      console.log(`OpsDesk listening on http://localhost:${PORT}`);
+      console.log('[auth] WARNING: running the IMPERSONABLE offline demo auth (X-User-Id header selects any user).');
+      console.log('[auth] This is intentional for the offline hackathon demo. For verified sign-in run: npm run start:secured');
+    }
+  });
 }
 module.exports = app;

@@ -91,14 +91,41 @@ rejected and every request needs a Firebase ID token.
   an agency. Requester accounts must likewise be provisioned with their agency
   binding by an administrator.
 
-Secured-mode environment:
+Running secured mode:
 
 ```bash
-OPSDESK_AUTH_MODE=firebase
-OPSDESK_FIREBASE_PROJECT_ID=<project id>
-OPSDESK_FIREBASE_CLIENT_CONFIG='{"apiKey":"...","authDomain":"...","projectId":"..."}'  # browser-publishable web config, not a secret
+npm run start:secured   # OPSDESK_AUTH_MODE=firebase node server.js
+```
+
+No other setup is needed: the Firebase web client config is committed as
+`firebase-client-config.web.json`. That file is browser-publishable client
+configuration by design (it ships to every browser that loads the app), not a
+secret; it contains no credential. Optional overrides, highest precedence first:
+
+```bash
+OPSDESK_FIREBASE_CLIENT_CONFIG='{"apiKey":"...",...}'  # replaces the committed file
+OPSDESK_FIREBASE_PROJECT_ID=<project id>                  # defaults to the config's projectId
 OPSDESK_TOKEN_STUB=1   # TEST ONLY: accepts Bearer test-<uid>; never set in a real deployment
 ```
+
+## Two auth modes, deliberately separate
+
+The app has exactly two auth modes and they cannot blend:
+
+- `demo` (plain `npm start`): the brief-sanctioned offline hackathon auth. The
+  client picks an identity via the `X-User-Id` header so the whole demo works
+  with no internet and no accounts. It is impersonable **by design and labeled
+  as such**: on startup the server prints a loud WARNING that it is running
+  impersonable demo auth and how to switch. This is the default so the
+  hackathon demo never depends on a network or an IdP.
+- `firebase` (`npm run start:secured`): the production-shaped path. The server
+  rejects the `X-User-Id` header outright (401), requires a Firebase-verified
+  ID token on every API call, and refuses to start without a project id. There
+  is no fallback: a request either carries a valid verified token or it fails.
+
+Choosing a mode is an explicit act (`start:secured` or the env var); nothing
+silently downgrades a secured run to demo auth, and a secured run that cannot
+verify tokens fails closed (401), never open.
 
 Firebase free (Spark) plan needs no payment information; Authentication with
 standard providers is a no-cost Firebase product. Email/password accounts here

@@ -16,7 +16,25 @@ const crypto = require('crypto');
 const { db } = require('./db');
 
 const MODE = process.env.OPSDESK_AUTH_MODE === 'firebase' ? 'firebase' : 'demo';
-const PROJECT_ID = process.env.OPSDESK_FIREBASE_PROJECT_ID || '';
+
+// Web client config for the Firebase JS SDK (project id, apiKey, authDomain).
+// This is browser-publishable client configuration by design, not a secret:
+// it ships to every browser that uses the app. Resolution order:
+// 1. OPSDESK_FIREBASE_CLIENT_CONFIG env (JSON string)
+// 2. ./firebase-client-config.web.json (committed; the project's own config)
+// 3. ./.firebase-client-config.json (optional gitignored local override)
+function loadClientConfig() {
+  if (process.env.OPSDESK_FIREBASE_CLIENT_CONFIG) {
+    try { return JSON.parse(process.env.OPSDESK_FIREBASE_CLIENT_CONFIG); } catch { return null; }
+  }
+  const fs = require('fs');
+  for (const f of ['firebase-client-config.web.json', '.firebase-client-config.json']) {
+    try { return JSON.parse(fs.readFileSync(require('path').join(__dirname, f), 'utf8')); } catch { /* next */ }
+  }
+  return null;
+}
+const CLIENT_CONFIG = loadClientConfig();
+const PROJECT_ID = process.env.OPSDESK_FIREBASE_PROJECT_ID || (CLIENT_CONFIG && CLIENT_CONFIG.projectId) || '';
 const CERTS_URL = 'https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com';
 
 const USER_SQL = 'SELECT u.*, a.name AS agency_name FROM users u LEFT JOIN agencies a ON a.id=u.agency_id';
@@ -25,6 +43,8 @@ const userByUid = (uid) => db.prepare(USER_SQL + ' WHERE u.firebase_uid=?').get(
 
 let verifier = null;
 if (MODE === 'firebase') {
+  if (!CLIENT_CONFIG && process.env.OPSDESK_TOKEN_STUB !== '1')
+    console.warn('[auth] WARNING: firebase mode has no web client config (env OPSDESK_FIREBASE_CLIENT_CONFIG or firebase-client-config.web.json) - browser sign-in cannot initialize.');
   if (process.env.OPSDESK_TOKEN_STUB === '1') {
     // Test-only verifier: token "test-<uid>" verifies as that uid. Never set this
     // outside the test suite; README documents it as test-only.
@@ -87,11 +107,9 @@ function currentUser(req, res, next) {
   next();
 }
 
-// Web client config for the Firebase JS SDK (project id, apiKey, authDomain).
-// This is browser-publishable client configuration by design, not a secret.
 function clientConfig() {
   if (MODE !== 'firebase' || process.env.OPSDESK_TOKEN_STUB === '1') return null;
-  try { return JSON.parse(process.env.OPSDESK_FIREBASE_CLIENT_CONFIG || 'null'); } catch { return null; }
+  return CLIENT_CONFIG;
 }
 
 module.exports = { MODE, currentUser, clientConfig };
