@@ -152,11 +152,11 @@ async function viewTicket(id) {
           </div>`).join('') || ''}
         </div>
         <div class="card">
-          <div class="section-title">Activity timeline</div>
+          <div class="section-title">Case activity timeline</div>
           <ul class="timeline">
             ${timeline.map(e => `<li class="t-${e.type}">
               <div class="tl-detail">${esc(e.detail)}</div>
-              <div class="tl-meta">${esc(e.actor_name)} · ${fmtTs(e.created_at)}</div>
+              <div class="tl-meta">T-${e.ticket_id} · ${esc(e.actor_name)} · ${fmtTs(e.created_at)}</div>
             </li>`).join('')}
           </ul>
         </div>
@@ -187,7 +187,7 @@ async function viewNew() {
         <label class="f">Last cancellation date (LCD)<input class="f" id="f-lcd" type="date"></label>
       </div>
       <label class="f">Intent
-        <select class="f" id="f-intent">${boot.intents.map(i => `<option value="${i.id}">${esc(i.label)}</option>`).join('')}</select>
+        <select class="f" id="f-intent">${boot.intents.map(i => `<option value="${i.id}" ${i.id === 'other' ? 'selected' : ''}>${esc(i.label)}</option>`).join('')}</select>
       </label>
       <div class="suggest-box" id="suggestBox"></div>
       <div><button type="button" class="btn" onclick="suggest()">Suggest intent from text</button>
@@ -201,13 +201,12 @@ async function suggest() {
   const description = document.getElementById('f-desc').value;
   const box = document.getElementById('suggestBox');
   const s = await api('/intents/suggest', { method: 'POST', body: { title, description } });
-  if (s.confidence > 0) {
+  box.className = 'suggest-box show';
+  if (!s.abstain) {
     document.getElementById('f-intent').value = s.intent_id;
-    box.className = 'suggest-box show';
-    box.innerHTML = `Suggested: <strong>${esc(s.label)}</strong> (${Math.round(s.confidence * 100)}% confidence, matched: ${s.matched.map(esc).join(', ')}) — rules-based suggestion, override anytime.`;
+    box.innerHTML = `Suggested: <strong>${esc(s.label)}</strong> (model score ${Math.round(s.confidence * 100)}%, not measured accuracy). Evidence: ${s.matched.map(esc).join(', ')}. Offline example-trained classifier; override anytime.`;
   } else {
-    box.className = 'suggest-box show';
-    box.innerHTML = 'No keyword match, left as <strong>Other</strong>. Pick the right intent manually.';
+    box.innerHTML = `<strong>Manual selection needed.</strong> ${esc(s.reason)}. Your current selection is unchanged. Review: ${(s.alternatives || []).map(a => esc(a.label)).join(' / ')}.`;
   }
 }
 

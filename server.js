@@ -64,7 +64,13 @@ app.get('/api/tickets', currentUser, (req, res) => {
            t.tboh, t.priority, t.intent_id, i.label AS intent_label, t.status,
            t.check_in_date, t.lcd_date, t.assigned_to, au.name AS assigned_to_name,
            t.created_at, t.updated_at,
-           (SELECT COUNT(*) FROM ticket_links tl WHERE tl.ticket_id = t.id OR tl.linked_ticket_id = t.id) AS link_count
+           (WITH RECURSIVE component(id) AS (
+             SELECT t.id UNION
+             SELECT CASE WHEN l.ticket_id=c.id THEN l.linked_ticket_id ELSE l.ticket_id END
+             FROM component c JOIN ticket_links l ON l.ticket_id=c.id OR l.linked_ticket_id=c.id
+             JOIN tickets peer ON peer.id=CASE WHEN l.ticket_id=c.id THEN l.linked_ticket_id ELSE l.ticket_id END
+             WHERE peer.agency_id=t.agency_id
+           ) SELECT COUNT(*)-1 FROM component) AS link_count
     FROM tickets t
     JOIN agencies a ON a.id = t.agency_id
     JOIN intents i ON i.id = t.intent_id
@@ -94,7 +100,7 @@ app.post('/api/tickets', currentUser, (req, res) => {
   } else {
     agencyId = req.user.agency_id; // requesters can only file for their own agency
   }
-  const dateOk = (v) => v === undefined || v === null || v === '' || /^\d{4}-\d{2}-\d{2}$/.test(v);
+  const dateOk = (v) => v === undefined || v === null || v === '' || (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) && !isNaN(Date.parse(v)) && new Date(v).toISOString().slice(0,10) === v);
   if (!dateOk(b.check_in_date) || !dateOk(b.lcd_date)) errors.push('Dates must be YYYY-MM-DD');
   if (errors.length) return res.status(400).json({ errors });
 
@@ -145,15 +151,15 @@ app.get('/api/tickets/:id', currentUser, (req, res) => {
     WHERE o.id IN (${[...seen].join(',')}) ORDER BY o.created_at`).all() : [];
   const nodes = nodeRows.filter(o => o.id !== ticket.id && (visibleAll || o.agency_id === req.user.agency_id));
   const nodeIds = new Set(nodes.map(n => n.id));
-  const edges = [...edgeMap.values()].filter(e => nodeIds.has(e.ticket_id) && nodeIds.has(e.linked_ticket_id));
+  const edges = [...edgeMap.values()].filter(e => (e.ticket_id === ticket.id || nodeIds.has(e.ticket_id)) && (e.linked_ticket_id === ticket.id || nodeIds.has(e.linked_ticket_id)));
   const links = nodes.map(n => ({
     ...n,
     reason: edges.filter(e => e.ticket_id === n.id || e.linked_ticket_id === n.id).map(e => e.reason).join(' · '),
   }));
   const timeline = db.prepare(`
-    SELECT ac.type, ac.detail, ac.created_at, u.name AS actor_name, u.role AS actor_role
+    SELECT ac.ticket_id, ac.type, ac.detail, ac.created_at, u.name AS actor_name, u.role AS actor_role
     FROM activity ac JOIN users u ON u.id = ac.actor_id
-    WHERE ac.ticket_id = ? ORDER BY ac.created_at, ac.id`).all(ticket.id);
+    WHERE ac.ticket_id IN (${[ticket.id, ...nodeIds].join(',')}) ORDER BY ac.created_at, ac.id`).all();
   res.json({ ticket, links, timeline });
 });
 

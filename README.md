@@ -21,7 +21,7 @@ npm start       # http://localhost:4173
 Run the checks:
 
 ```bash
-npm test        # 18 API smoke checks against a temp database
+npm test        # 54 API smoke checks + real-process restart test against a temp database
 ```
 
 ## Demo users (demo auth, as the brief allows)
@@ -50,10 +50,11 @@ the server-side agency scoping is the part that carries over.
 - The case panel shows every linked ticket with why it is linked, so an agent opening the
   third refund contact sees the first two immediately (seeded story: TBOH-88213,
   "same refund, three contacts").
-- Rules-based intent suggestion over a fixed taxonomy (no free text): weighted keyword
-  scoring, title weighs 2x, separator/case-insensitive ("money-back" = "money back"),
-  with confidence and matched terms; manual select always overrides. Approach documented
-  in `intent.js`. Lightweight ML over linked history is a stretch item, not this stage.
+- Fixed intent taxonomy and a fully offline example-trained Naive Bayes classifier
+  with unigram/bigram features, clause-scoped negation and conservative abstention.
+  Ambiguous, mixed or low-evidence text asks for manual review without overwriting
+  the agent's choice. Model scores are relative scores, **not measured accuracy**.
+  Training examples, thresholds and method live in `intent.js`; no keys or paid APIs.
 - Status flow: New -> Open -> Pending -> Escalated -> Resolved -> Closed.
 - Activity timeline records creation, links, status changes, escalations (first-class
   event, not just a status line) and assignments with actor and time.
@@ -78,8 +79,14 @@ the server-side agency scoping is the part that carries over.
 - Node.js + Express + better-sqlite3, vanilla JS frontend. No build step.
 - Demo login instead of a real IdP (brief-sanctioned assumption).
 - Single-tenant TBO organization for the hackathon (brief-sanctioned assumption).
-- Intent model = rules, not ML: zero cost, no GPU, honest confidence. Lightweight ML over
-  linked history is a stretch item.
+- Intent model: small, curated-corpus multinomial Naive Bayes with safety rules for
+  abstention, not an LLM. Corpus has 104 examples across 8 intents; Other is the manual
+  fallback. Scores are uncalibrated and the corpus is English travel-ops text, not a
+  general language-understanding system. Unknown wording and complex negation may
+  need manual review. Tests are regressions, not a representative accuracy benchmark.
+- Description, booking reference and travel dates may be omitted for enquiries before
+  booking. Agency, title, priority and taxonomy choice are required. Dates, when
+  supplied, must be real calendar dates, including valid leap years.
 - Simulated agent availability will land with the routing stage (brief-sanctioned).
 
 ## API sketch
