@@ -97,6 +97,7 @@ async function viewTicket(id) {
           <dt>Owner</dt><dd>${esc(t.assigned_to_name) || 'Unassigned'}</dd>
         </dl>
         <p style="font-size:13px;color:var(--ink2);line-height:1.55">${esc(t.description)}</p>
+        <div class="error-box" id="routing-error" hidden></div>
         <div class="actions">
           <select class="f" id="statusSel" style="padding:7px 10px">
             ${['Open', 'Pending', 'Escalated', 'Resolved', 'Closed'].filter(s => s !== t.status).map(s => `<option>${s}</option>`).join('')}

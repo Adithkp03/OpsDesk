@@ -21,7 +21,7 @@ async function viewQueue(){
  <div class="queue">${shown.length?shown.map(ticketRow).join(''):'<div class="empty">No tickets in this view.</div>'}</div>`;
  renderWho();
 }
-async function autoRoute(id){try{const r=await api(`/tickets/${id}/route`,{method:'POST',body:{}});await viewTicket(id);}catch(e){alert(e.message);}}
+async function autoRoute(id){try{const r=await api(`/tickets/${id}/route`,{method:'POST',body:{}});await viewTicket(id);}catch(e){const box=document.getElementById('routing-error');if(box){box.hidden=false;box.textContent=e.message;box.scrollIntoView({block:'center'});}else alert(e.message);}}
 async function assign(id){try{const v=document.getElementById('assignSel').value;const reason=document.getElementById('ownerReason')?.value||'';await api(`/tickets/${id}/assign`,{method:'POST',body:{agent_id:v===''?null:Number(v),reason}});await viewTicket(id);}catch(e){alert(e.message);}}
 async function appendCollaboration(id){
  const u=userById(me()),isOps=u.role!=='requester';
