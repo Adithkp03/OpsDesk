@@ -53,9 +53,31 @@ const server = app.listen(0, async () => {
     const d3 = await fetch(base + '/api/tickets/1003', { headers: H(1) }).then(J);
     ok('assignment logged', d3.ticket.assigned_to_name === 'Rohit Sharma' && d3.timeline.some(e => e.type === 'assigned'));
 
+    // 5b. Full status flow chain: New -> Open -> Pending -> Escalated -> Resolved -> Closed.
+    // T-1003 is already Open from test 4; walk it the rest of the way.
+    for (const s of ['Pending', 'Escalated', 'Resolved', 'Closed']) {
+      const r = await fetch(base + '/api/tickets/1003/status', { method: 'POST', headers: H(1), body: JSON.stringify({ status: s, note: s === 'Escalated' ? 'client threatening to leave' : '' }) });
+      assert(r.status === 200, 'status move to ' + s + ' accepted');
+    }
+    const dFlow = await fetch(base + '/api/tickets/1003', { headers: H(1) }).then(J);
+    ok('full status chain reaches Closed', dFlow.ticket.status === 'Closed');
+    const esc = dFlow.timeline.find(e => e.type === 'escalated');
+    ok('escalation is a first-class timeline event with actor and time', !!esc && esc.detail.includes('Pending -> Escalated') && esc.actor_name === 'Ananya Rao' && !!esc.created_at);
+    const same = await fetch(base + '/api/tickets/1003/status', { method: 'POST', headers: H(1), body: JSON.stringify({ status: 'Closed' }) });
+    ok('no-op status move rejected (400)', same.status === 400);
+
     // 6. Rules-based intent suggestion.
     const sug = await fetch(base + '/api/intents/suggest', { method: 'POST', headers: H(1), body: JSON.stringify({ title: 'Refund not received for cancelled tour', description: 'agency wants money back' }) }).then(J);
     ok('suggests refund_delay with confidence', sug.intent_id === 'refund_delay' && sug.confidence > 0);
+    ok('suggestion lists matched terms', sug.matched.length > 0 && sug.matched.includes('refund'));
+    const sugPay = await fetch(base + '/api/intents/suggest', { method: 'POST', headers: H(1), body: JSON.stringify({ title: 'Charged twice on my card', description: '' }) }).then(J);
+    ok('suggests payment_issue for card text', sugPay.intent_id === 'payment_issue');
+    const sugCx = await fetch(base + '/api/intents/suggest', { method: 'POST', headers: H(1), body: JSON.stringify({ title: 'Please cancel this booking', description: '' }) }).then(J);
+    ok('suggests cancellation', sugCx.intent_id === 'cancellation');
+    const sugHy = await fetch(base + '/api/intents/suggest', { method: 'POST', headers: H(1), body: JSON.stringify({ title: 'Money-back still not received', description: '' }) }).then(J);
+    ok('hyphenated wording still matches (money-back = money back)', sugHy.intent_id === 'refund_delay');
+    const sugNone = await fetch(base + '/api/intents/suggest', { method: 'POST', headers: H(1), body: JSON.stringify({ title: 'qz xj wobble', description: 'fnord' }) }).then(J);
+    ok('no keyword hit falls back to Other at 0 confidence', sugNone.intent_id === 'other' && sugNone.confidence === 0);
 
     // 7. Validation rejects bad input.
     const bad = await fetch(base + '/api/tickets', { method: 'POST', headers: H(1), body: JSON.stringify({ title: 'x', priority: 'P9', intent_id: 'nope', agency_id: 1 }) });

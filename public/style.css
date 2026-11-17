@@ -60,6 +60,7 @@ h1 { font-size: 20px; margin-bottom: 4px; }
 .timeline li::before { content: ''; position: absolute; left: -6px; top: 3px; width: 10px; height: 10px; border-radius: 50%; background: var(--teal); }
 .timeline li.t-created::before { background: var(--blue); }
 .timeline li.t-linked::before { background: var(--amber); }
+.timeline li.t-escalated::before { background: var(--red); }
 .timeline .tl-detail { font-size: 13px; }
 .timeline .tl-meta { color: var(--ink3); font-size: 11px; margin-top: 2px; }
 form.stack { display: flex; flex-direction: column; gap: 12px; max-width: 640px; }

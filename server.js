@@ -166,7 +166,10 @@ app.post('/api/tickets/:id/status', currentUser, (req, res) => {
   if (!STATUSES.includes(next)) return res.status(400).json({ error: `Status must be one of ${STATUSES.join(', ')}` });
   if (next === ticket.status) return res.status(400).json({ error: `Already ${next}` });
   db.prepare('UPDATE tickets SET status=?, updated_at=datetime(\'now\') WHERE id=?').run(next, ticket.id);
-  logActivity(ticket.id, req.user.id, 'status_changed', `${ticket.status} -> ${next}${note ? ': ' + note : ''}`);
+  // Escalation is a first-class timeline event (PS MVP-1 lists escalations separately),
+  // not just another status change. Full escalation-manager routing lands with the SLA stage.
+  const type = next === 'Escalated' ? 'escalated' : 'status_changed';
+  logActivity(ticket.id, req.user.id, type, `${ticket.status} -> ${next}${note ? ': ' + note : ''}`);
   res.json({ id: ticket.id, status: next });
 });
 

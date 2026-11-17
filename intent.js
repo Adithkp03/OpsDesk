@@ -15,20 +15,27 @@ const INTENTS = [
   { id: 'other', label: 'Other', keywords: [] },
 ];
 
+// Normalize separators/punctuation to spaces so hyphenated or slashed text still matches
+// ("re-booking" matches "rebooking", "non-refundable" matches "refundable"), which keeps
+// the rules from being brittle about exact wording. Matching is otherwise plain substring.
+const norm = (s) => (s || '').toLowerCase().replace(/[\/_\-.,;:!?()"']+/g, ' ').replace(/\s+/g, ' ');
+
 function suggestIntent(title, description) {
-  const t = (title || '').toLowerCase();
-  const d = (description || '').toLowerCase();
+  const t = norm(title), d = norm(description);
+  // Squashed copies (spaces removed) so "money-back"/"money back" and "re-booking"/"rebooking" match either way.
+  const ts = t.replace(/ /g, ''), ds = d.replace(/ /g, '');
+  const hit = (kw, spaced, squashed) => spaced.includes(kw) || squashed.includes(kw.replace(/ /g, ''));
   let best = null;
   for (const intent of INTENTS) {
     let score = 0;
     for (const kw of intent.keywords) {
-      if (t.includes(kw)) score += 2;
-      if (d.includes(kw)) score += 1;
+      if (hit(kw, t, ts)) score += 2;
+      if (hit(kw, d, ds)) score += 1;
     }
     if (score > 0 && (!best || score > best.score)) best = { intent, score };
   }
   if (!best) return { intent_id: 'other', label: 'Other', confidence: 0, matched: [] };
-  const matched = best.intent.keywords.filter(kw => t.includes(kw) || d.includes(kw));
+  const matched = best.intent.keywords.filter(kw => hit(kw, t, ts) || hit(kw, d, ds));
   const confidence = Math.min(0.9, 0.45 + 0.15 * best.score);
   return { intent_id: best.intent.id, label: best.intent.label, confidence: Math.round(confidence * 100) / 100, matched };
 }

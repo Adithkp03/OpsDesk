@@ -50,11 +50,13 @@ the server-side agency scoping is the part that carries over.
 - The case panel shows every linked ticket with why it is linked, so an agent opening the
   third refund contact sees the first two immediately (seeded story: TBOH-88213,
   "same refund, three contacts").
-- Rules-based intent suggestion (keyword scoring, title weighs 2x) with confidence and
-  matched terms; manual select always overrides. Approach documented in `intent.js`.
+- Rules-based intent suggestion over a fixed taxonomy (no free text): weighted keyword
+  scoring, title weighs 2x, separator/case-insensitive ("money-back" = "money back"),
+  with confidence and matched terms; manual select always overrides. Approach documented
+  in `intent.js`. Lightweight ML over linked history is a stretch item, not this stage.
 - Status flow: New -> Open -> Pending -> Escalated -> Resolved -> Closed.
-- Activity timeline records creation, links, status changes and assignments with actor
-  and time.
+- Activity timeline records creation, links, status changes, escalations (first-class
+  event, not just a status line) and assignments with actor and time.
 - Agency scoping: requesters only read and file for their own agency (403 otherwise).
 - Durable SQLite storage: refresh never wipes the queue, and the queue, cases and
   timelines survive a full server restart (tested).
