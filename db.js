@@ -59,6 +59,14 @@ CREATE TABLE IF NOT EXISTS activity (
 );
 `);
 
+// Additive migration: link each demo user to a verified external auth account.
+// Existing databases gain the column without reseeding; demo mode ignores it.
+if (!db.prepare('PRAGMA table_info(users)').all().some(c => c.name === 'firebase_uid')) {
+  db.exec('ALTER TABLE users ADD COLUMN firebase_uid TEXT');
+}
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_firebase_uid ON users(firebase_uid) WHERE firebase_uid IS NOT NULL');
+
+
 function logActivity(ticketId, actorId, type, detail) {
   db.prepare('INSERT INTO activity (ticket_id, actor_id, type, detail) VALUES (?,?,?,?)')
     .run(ticketId, actorId, type, detail || '');

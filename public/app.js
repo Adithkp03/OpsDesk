@@ -7,11 +7,18 @@ let boot = null,preselected=false;
 
 function me() { return parseInt(localStorage.getItem('opsdesk_user') || '', 10) || null; }
 function setMe(id) { id ? localStorage.setItem('opsdesk_user', id) : localStorage.removeItem('opsdesk_user'); }
+function authToken() { return localStorage.getItem('opsdesk_token') || null; }
+function setAuthToken(t) { t ? localStorage.setItem('opsdesk_token', t) : localStorage.removeItem('opsdesk_token'); }
+function firebaseMode() { return boot && boot.auth_mode === 'firebase'; }
+function authed() { return firebaseMode() ? !!authToken() : !!me(); }
 
 async function api(path, opts = {}) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (firebaseMode()) headers.Authorization = 'Bearer ' + (authToken() || '');
+  else headers['X-User-Id'] = me() || '';
   const res = await fetch('/api' + path, {
     method: opts.method || 'GET',
-    headers: { 'Content-Type': 'application/json', 'X-User-Id': me() || '' },
+    headers,
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
@@ -25,11 +32,16 @@ const fmtDate = (s) => s ? new Date(s + (s.length === 10 ? 'T00:00:00Z' : '')).t
 const fmtTs = (s) => new Date(s.replace(' ', 'T') + 'Z').toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 const userById = (id) => (boot.users.find(u => u.id === id) || {});
 
+function signOut() {
+  setMe(null); setAuthToken(null); preselected = true;
+  history.replaceState(null, '', location.pathname + location.hash); route();
+}
+
 function renderWho() {
   const u = userById(me());
   $who.innerHTML = u.role
     ? `<span><strong>${esc(u.name)}</strong> · ${u.role === 'requester' ? 'Agency: ' + esc(u.agency_name) : u.role.toUpperCase()}</span>
-       <button class="btn small" onclick="setMe(null);preselected=true;history.replaceState(null,'',location.pathname+location.hash);route()">Switch user</button>`
+       <button class="btn small" onclick="signOut()">${firebaseMode() ? 'Sign out' : 'Switch user'}</button>`
     : '';
 }
 
@@ -54,6 +66,19 @@ function ticketRow(t) {
 
 async function viewLogin() {
   renderWho();
+  if (firebaseMode()) {
+    $app.innerHTML = `<div class="login-wrap">
+      <h1>Sign in to OpsDesk</h1>
+      <p class="sub" style="color:var(--ink2)">Verified sign-in (Firebase Authentication, email + password). Roles and agency access are still enforced by this server for every request. All accounts are synthetic demo accounts provisioned by an administrator; self-registration is disabled.</p>
+      <div class="form-row" style="max-width:360px;margin:18px auto;text-align:left">
+        <label class="f">Email<input class="f" id="loginEmail" type="email" autocomplete="username"></label>
+        <label class="f">Password<input class="f" id="loginPassword" type="password" autocomplete="current-password"></label>
+        <button class="btn" id="loginBtn" onclick="firebaseLogin()">Sign in</button>
+        <div class="error-box" id="loginError" hidden></div>
+      </div>
+    </div>`;
+    return;
+  }
   const groups = [['agent', 'Ops agents'], ['em', 'Escalation manager'], ['lead', 'Ops lead'], ['requester', 'Agency requesters']];
   $app.innerHTML = `<div class="login-wrap">
     <h1>Choose a demo user</h1>
@@ -240,7 +265,11 @@ async function route() {
   if (!boot) boot = await api('/bootstrap');
   renderWho();
   const h = location.hash || '#/queue';
-  if (!me()) return viewLogin();
+  if (!authed()) return viewLogin();
+  if (firebaseMode() && !me()) {
+    try { const w = await api('/whoami'); setMe(w.id); renderWho(); }
+    catch (e) { setAuthToken(null); return viewLogin(); }
+  }
   if (h.startsWith('#/ticket/')) return viewTicket(parseInt(h.split('/')[2], 10));
   if (h === '#/lead') return viewLead();
   if (h === '#/data') return viewDataPolicy();
@@ -249,3 +278,36 @@ async function route() {
   return viewQueue();
 }
 window.addEventListener('hashchange', route);
+
+// Secured mode: verified sign-in through Firebase Authentication. The provider
+// proves identity; this server still enforces role and agency scope per request.
+let _fbApp = null;
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src; s.onload = resolve; s.onerror = () => reject(new Error('Could not load the sign-in library. Check your connection.'));
+    document.head.append(s);
+  });
+}
+async function firebaseLogin() {
+  const err = document.getElementById('loginError');
+  err.hidden = true;
+  try {
+    if (!window.firebase) {
+      await loadScript('https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js');
+      await loadScript('https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js');
+    }
+    if (!_fbApp) _fbApp = firebase.initializeApp(boot.firebase_client_config);
+    const email = document.getElementById('loginEmail').value.trim();
+    const password = document.getElementById('loginPassword').value;
+    const cred = await firebase.auth().signInWithEmailAndPassword(email, password);
+    setAuthToken(await cred.user.getIdToken());
+    const w = await api('/whoami');
+    setMe(w.id);
+    location.hash = '#/queue';
+    route();
+  } catch (e) {
+    err.textContent = e && e.code === 'auth/invalid-credential' ? 'Wrong email or password.' : (e.message || 'Sign-in failed');
+    err.hidden = false;
+  }
+}

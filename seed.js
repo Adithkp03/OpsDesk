@@ -33,6 +33,16 @@ insUser.run(5, 'Priya Menon', 'requester', 1);
 insUser.run(6, 'Omar Haddad', 'requester', 2);
 insUser.run(7, 'Ingrid Berg', 'requester', 3);
 
+// Secured (Firebase) mode: re-apply provisioned demo-account UIDs after a reseed.
+// demo-auth-accounts.json holds only emails + Firebase UIDs (identifiers, not secrets);
+// passwords live in the vault. Absent the file, secured mode simply has no provisioned users.
+try {
+  const map = JSON.parse(require('fs').readFileSync(require('path').join(__dirname, 'demo-auth-accounts.json'), 'utf8'));
+  const upd = db.prepare('UPDATE users SET firebase_uid=? WHERE id=?');
+  for (const [id, m] of Object.entries(map)) upd.run(m.uid, Number(id));
+  console.log('Applied firebase_uid for ' + Object.keys(map).length + ' demo accounts.');
+} catch (e) { /* no demo-auth-accounts.json present */ }
+
 const travelDate=days=>{const d=new Date();d.setUTCDate(d.getUTCDate()+days);return d.toISOString().slice(0,10);};
 const ins = db.prepare(`INSERT INTO tickets
   (id, title, description, agency_id, tboh, priority, intent_id, status, check_in_date, lcd_date, created_by, assigned_to, created_at, updated_at)

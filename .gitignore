@@ -2,3 +2,4 @@ node_modules/
 opsdesk.db
 opsdesk.db-wal
 opsdesk.db-shm
+.firebase-client-config.json

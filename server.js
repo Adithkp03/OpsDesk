@@ -13,16 +13,9 @@ app.use(express.static(path.join(__dirname, 'public')));
 const STATUSES = ['New', 'Open', 'Pending', 'Escalated', 'Resolved', 'Closed'];
 const PRIORITIES = ['P1', 'P2', 'P3'];
 
-// --- Demo auth (PS MVP-7 allows demo auth; full role model lands with its stage) ---
-function currentUser(req, res, next) {
-  const raw=req.header('X-User-Id')||'';
-  const id = /^[1-9]\d*$/.test(raw)?Number(raw):null;
-  if (!id) return res.status(401).json({ error: 'Missing X-User-Id demo header' });
-  const user = db.prepare('SELECT u.*, a.name AS agency_name FROM users u LEFT JOIN agencies a ON a.id=u.agency_id WHERE u.id=?').get(id);
-  if (!user) return res.status(401).json({ error: 'Unknown demo user' });
-  req.user = user;
-  next();
-}
+// Auth: demo header by default, verified Firebase identity when OPSDESK_AUTH_MODE=firebase.
+// Role and agency checks below are identical in both modes (see access.js).
+const { MODE: AUTH_MODE, currentUser, clientConfig } = require('./auth');
 const canSeeAll = isOps;
 
 function getTicketScoped(req, id) {
@@ -48,7 +41,15 @@ app.get('/api/bootstrap', (req, res) => {
     intents: INTENTS.map(({ id, label }) => ({ id, label })),
     statuses: STATUSES,
     priorities: PRIORITIES,
+    auth_mode: AUTH_MODE,
+    firebase_client_config: clientConfig(),
   });
+});
+
+// Current signed-in user (never leaks the external provider uid).
+app.get('/api/whoami', currentUser, (req, res) => {
+  const { firebase_uid, ...u } = req.user;
+  res.json(u);
 });
 
 // --- Intent suggestion (rules-based, overridable) ---

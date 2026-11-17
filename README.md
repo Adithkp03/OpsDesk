@@ -72,6 +72,52 @@ the server-side agency scoping is the part that carries over.
 | MVP-6 Persistence, export, scale documentation | 6 | Done (streaming CSV without row cutoff; retention/scale design below) |
 | MVP-7 Roles & access | 7 | Done (role table enforced at the API, not just hidden UI) |
 
+## Secured mode (Firebase Authentication)
+
+Default startup is the documented hackathon demo auth (selectable identity header),
+which keeps the app fully offline. Setting `OPSDESK_AUTH_MODE=firebase` switches to
+verified sign-in and **deletes the impersonation path**: the `X-User-Id` header is
+rejected and every request needs a Firebase ID token.
+
+- The provider proves **identity only**. Role and agency scope stay server-owned in
+  the SQLite `users` row matched by the verified account's `firebase_uid`; every
+  rule above (requester creator+agency, EM escalation queue, lead overview) is
+  enforced by the same code and tests in both modes.
+- The server verifies tokens against Google's published public signing
+  certificates (RS256 signature, issuer, audience, expiry) - the same check the
+  Firebase Admin SDK performs. **No service account or private key is stored**.
+- Privileged roles (agent, EM, lead) are provisioned by an administrator writing
+  the `firebase_uid` onto the users row. Self-registration cannot pick a role or
+  an agency. Requester accounts must likewise be provisioned with their agency
+  binding by an administrator.
+
+Secured-mode environment:
+
+```bash
+OPSDESK_AUTH_MODE=firebase
+OPSDESK_FIREBASE_PROJECT_ID=<project id>
+OPSDESK_FIREBASE_CLIENT_CONFIG='{"apiKey":"...","authDomain":"...","projectId":"..."}'  # browser-publishable web config, not a secret
+OPSDESK_TOKEN_STUB=1   # TEST ONLY: accepts Bearer test-<uid>; never set in a real deployment
+```
+
+Firebase free (Spark) plan needs no payment information; Authentication with
+standard providers is a no-cost Firebase product. Email/password accounts here
+are synthetic; sign-in requires internet access to Google.
+
+Provisioned synthetic demo accounts (all passwords live in the project owner's
+password vault, one login per account; `demo-auth-accounts.json` maps each
+account's Firebase UID to its seeded user and is re-applied by `node seed.js`):
+
+| Account email | Demo user | Role |
+| --- | --- | --- |
+| ananya.rao@opsdesk.demo | Ananya Rao | agent |
+| rohit.sharma@opsdesk.demo | Rohit Sharma | agent |
+| meera.iyer@opsdesk.demo | Meera Iyer | escalation manager |
+| arjun.nair@opsdesk.demo | Arjun Nair | team lead |
+| priya.menon@opsdesk.demo | Priya Menon | requester (agency 1) |
+| omar.haddad@opsdesk.demo | Omar Haddad | requester (agency 2) |
+| ingrid.berg@opsdesk.demo | Ingrid Berg | requester (agency 3) |
+
 ## Stack and assumptions
 
 - Node.js + Express + better-sqlite3, vanilla JS frontend. No build step.
