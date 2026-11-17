@@ -154,7 +154,7 @@ app.get('/api/tickets/:id', currentUser, (req, res) => {
   const edges = [...edgeMap.values()].filter(e => (e.ticket_id === ticket.id || nodeIds.has(e.ticket_id)) && (e.linked_ticket_id === ticket.id || nodeIds.has(e.linked_ticket_id)));
   const links = nodes.map(n => ({
     ...n,
-    reason: edges.filter(e => e.ticket_id === n.id || e.linked_ticket_id === n.id).map(e => e.reason).join(' · '),
+    reason: [...new Set(edges.filter(e => e.ticket_id === n.id || e.linked_ticket_id === n.id).flatMap(e => e.reason.split(' · ')))].join(' · '),
   }));
   const timeline = db.prepare(`
     SELECT ac.ticket_id, ac.type, ac.detail, ac.created_at, u.name AS actor_name, u.role AS actor_role
