@@ -273,7 +273,7 @@ function suggestIntent(title, description) {
     return {
       intent_id: 'other', label: 'Other', confidence: Math.min(0.99, Math.round(first.p * 100) / 100),
       matched, abstain: true, reason: clauseWinners.size > 1 || (s1 > 0 && s2 >= AMBIGUITY_RATIO * s1) ? 'Multiple intents need manual review' : 'Not enough clear evidence; select manually',
-      alternatives: ranked.filter(r => clauseWinners.size > 1 ? clauseWinners.has(r.id) : true).slice(0, 3).map(r => ({ intent_id: r.id, label: label(r.id), confidence: Math.round(r.p * 100) / 100 })),
+      alternatives: clauseWinners.size > 1 ? ranked.filter(r => clauseWinners.has(r.id)).map(r => ({ intent_id: r.id, label: label(r.id), confidence: Math.round(r.p * 100) / 100 })) : [],
     };
   }
   return {

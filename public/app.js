@@ -206,7 +206,7 @@ async function suggest() {
     document.getElementById('f-intent').value = s.intent_id;
     box.innerHTML = `Suggested: <strong>${esc(s.label)}</strong> (model score ${Math.round(s.confidence * 100)}%, not measured accuracy). Evidence: ${s.matched.map(esc).join(', ')}. Offline example-trained classifier; override anytime.`;
   } else {
-    box.innerHTML = `<strong>Manual selection needed.</strong> ${esc(s.reason)}. Your current selection is unchanged. Review: ${(s.alternatives || []).map(a => esc(a.label)).join(' / ')}.`;
+    box.innerHTML = `<strong>Manual selection needed.</strong> ${esc(s.reason)}. Your current selection is unchanged.${s.alternatives?.length ? ' Review: ' + s.alternatives.map(a => esc(a.label)).join(' / ') + '.' : ''}`;
   }
 }
 
