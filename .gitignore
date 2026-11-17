@@ -1,0 +1,4 @@
+node_modules/
+opsdesk.db
+opsdesk.db-wal
+opsdesk.db-shm
