@@ -123,15 +123,33 @@ app.post('/api/tickets', currentUser, (req, res) => {
 app.get('/api/tickets/:id', currentUser, (req, res) => {
   const { ticket, error } = getTicketScoped(req, parseInt(req.params.id, 10));
   if (error) return res.status(error).json({ error: error === 404 ? 'Ticket not found' : 'Not your agency\'s ticket' });
-  const links = db.prepare(`
-    SELECT tl.reason, tl.created_at AS linked_at, o.id, o.title, o.status, o.priority, o.tboh,
-           o.created_at, i.label AS intent_label, au.name AS assigned_to_name
-    FROM ticket_links tl
-    JOIN tickets o ON o.id = CASE WHEN tl.ticket_id = ? THEN tl.linked_ticket_id ELSE tl.ticket_id END
-    JOIN intents i ON i.id = o.intent_id
-    LEFT JOIN users au ON au.id = o.assigned_to
-    WHERE tl.ticket_id = ? OR tl.linked_ticket_id = ?
-    ORDER BY o.created_at`).all(ticket.id, ticket.id, ticket.id);
+  // One case = the connected component of the link graph (A-B and B-C means A, B, C
+  // share a case), not only directly linked pairs. Requesters never see nodes or edges
+  // belonging to another agency, even if a link somehow exists.
+  const visibleAll = canSeeAll(req.user);
+  const seen = new Set([ticket.id]);
+  const queue = [ticket.id];
+  const edgeMap = new Map();
+  while (queue.length) {
+    const cur = queue.shift();
+    for (const e of db.prepare('SELECT * FROM ticket_links WHERE ticket_id=? OR linked_ticket_id=?').all(cur, cur)) {
+      edgeMap.set(e.id, e);
+      const other = e.ticket_id === cur ? e.linked_ticket_id : e.ticket_id;
+      if (!seen.has(other)) { seen.add(other); queue.push(other); }
+    }
+  }
+  const nodeRows = seen.size > 1 ? db.prepare(`
+    SELECT o.id, o.title, o.status, o.priority, o.tboh, o.agency_id, o.created_at,
+           i.label AS intent_label, au.name AS assigned_to_name
+    FROM tickets o JOIN intents i ON i.id = o.intent_id LEFT JOIN users au ON au.id = o.assigned_to
+    WHERE o.id IN (${[...seen].join(',')}) ORDER BY o.created_at`).all() : [];
+  const nodes = nodeRows.filter(o => o.id !== ticket.id && (visibleAll || o.agency_id === req.user.agency_id));
+  const nodeIds = new Set(nodes.map(n => n.id));
+  const edges = [...edgeMap.values()].filter(e => nodeIds.has(e.ticket_id) && nodeIds.has(e.linked_ticket_id));
+  const links = nodes.map(n => ({
+    ...n,
+    reason: edges.filter(e => e.ticket_id === n.id || e.linked_ticket_id === n.id).map(e => e.reason).join(' · '),
+  }));
   const timeline = db.prepare(`
     SELECT ac.type, ac.detail, ac.created_at, u.name AS actor_name, u.role AS actor_role
     FROM activity ac JOIN users u ON u.id = ac.actor_id
@@ -178,6 +196,7 @@ app.post('/api/tickets/:id/links', currentUser, (req, res) => {
   const reason = String((req.body || {}).reason || '').trim().slice(0, 160) || 'Manually linked';
   const other = db.prepare('SELECT * FROM tickets WHERE id=?').get(otherId);
   if (!other || other.id === ticket.id) return res.status(400).json({ error: 'Choose another existing ticket' });
+  if (other.agency_id !== ticket.agency_id) return res.status(400).json({ error: 'Cases stay within one agency: cross-agency links would leak data between agencies' });
   if (!canSeeAll(req.user) && other.agency_id !== req.user.agency_id) return res.status(403).json({ error: 'Not your agency\'s ticket' });
   linkTickets(ticket.id, other.id, reason, req.user.id);
   res.json({ id: ticket.id, linked_to: other.id, reason });

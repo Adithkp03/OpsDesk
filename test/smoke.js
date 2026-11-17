@@ -65,6 +65,25 @@ const server = app.listen(0, async () => {
     const { db: db2 } = (() => { delete require.cache[require.resolve('../db')]; return require('../db'); })();
     ok('tickets persist on disk', db2.prepare('SELECT COUNT(*) c FROM tickets').get().c >= 8);
 
+
+    // 9. Transitive case: A-B and B-C manually linked puts A, B, C in ONE case.
+    const mk = (title) => fetch(base + '/api/tickets', {
+      method: 'POST', headers: H(1),
+      body: JSON.stringify({ title, description: 'chain test', agency_id: 2, tboh: '', priority: 'P3', intent_id: 'other' }),
+    }).then(J).then(r => r.id);
+    const A = await mk('Chain ticket alpha'), B = await mk('Chain ticket bravo'), C = await mk('Chain ticket charlie');
+    await fetch(base + `/api/tickets/${A}/links`, { method: 'POST', headers: H(1), body: JSON.stringify({ ticket_id: B, reason: 'chain test' }) });
+    await fetch(base + `/api/tickets/${B}/links`, { method: 'POST', headers: H(1), body: JSON.stringify({ ticket_id: C, reason: 'chain test' }) });
+    const caseA = await fetch(base + '/api/tickets/' + A, { headers: H(1) }).then(J);
+    const caseIds = caseA.links.map(l => l.id);
+    ok('transitive case shows A, B, C from A', caseIds.includes(B) && caseIds.includes(C) && caseA.links.length === 2);
+
+    // 10. Cross-agency links are refused, so cases cannot leak between agencies.
+    const cross = await fetch(base + '/api/tickets/1001/links', { method: 'POST', headers: H(1), body: JSON.stringify({ ticket_id: 1004, reason: 'should fail' }) });
+    ok('cross-agency link refused (400)', cross.status === 400);
+    const dAgency = await fetch(base + '/api/tickets/1001', { headers: H(5) }).then(J);
+    ok('requester case view carries only own-agency tickets', dAgency.links.every(l => l.reason && !String(l.title).includes('charged twice')));
+
     console.log(`\nAll ${pass} smoke checks passed.`);
     process.exit(0);
   } catch (e) {

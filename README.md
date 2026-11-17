@@ -21,13 +21,15 @@ npm start       # http://localhost:4173
 Run the checks:
 
 ```bash
-npm test        # 15 API smoke checks against a temp database
+npm test        # 18 API smoke checks against a temp database
 ```
 
 ## Demo users (demo auth, as the brief allows)
 
 Pick a user on the login screen. The browser sends the id as an `X-User-Id` header;
-`?as=<id>` preselects one (demo convenience, not security).
+`?as=<id>` preselects one. This is demo auth for the hackathon, as the brief allows -
+it is not production security. A real deployment would put a proper IdP in front;
+the server-side agency scoping is the part that carries over.
 
 | User | Role | Sees |
 | --- | --- | --- |
@@ -42,6 +44,9 @@ Pick a user on the login screen. The browser sends the id as an `X-User-Id` head
   check-in / LCD travel fields, status and owner.
 - **First-class linkage**: a new ticket auto-links to existing ones on the same agency +
   TBOH, and same agency + intent, with the reason stored on the link. No third-party app.
+  A case is the whole connected group: if A-B and B-C are linked, A's case shows B and C.
+  Cases stay within one agency; cross-agency links are refused so no agency can see
+  another's tickets through a case.
 - The case panel shows every linked ticket with why it is linked, so an agent opening the
   third refund contact sees the first two immediately (seeded story: TBOH-88213,
   "same refund, three contacts").
@@ -51,7 +56,8 @@ Pick a user on the login screen. The browser sends the id as an `X-User-Id` head
 - Activity timeline records creation, links, status changes and assignments with actor
   and time.
 - Agency scoping: requesters only read and file for their own agency (403 otherwise).
-- Durable SQLite storage: refresh never wipes the queue.
+- Durable SQLite storage: refresh never wipes the queue, and the queue, cases and
+  timelines survive a full server restart (tested).
 
 ## Feature checklist mapped to the brief
 
