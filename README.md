@@ -16,11 +16,91 @@ npm run seed    # first run only: demo agencies, users and the refund case
 npm start       # http://localhost:4173
 ```
 
+For the demo walk-through below, start from the demo seed instead. It adds a transferred
+ticket with a supplier conversation, a ticket already in the Escalation Manager queue and
+ops theme tags. It wipes the database and ages tickets relative to the moment you run it,
+so run it shortly before a demo (SLA states move with real time):
+
+```bash
+npm run seed:demo
+npm start
+```
+
 Run the checks:
 
 ```bash
-npm test        # 259 checks (54 MVP-1 + 48 routing/conversation + 71 SLA/insight + 86 data-access) + real-process restart test
+npm test        # 505 checks across 9 files, including test/journeys.js which walks demo journeys A-E
 ```
+
+## Demo script (about 4 minutes)
+
+Start from `npm run seed:demo` and `npm start`. Open `http://localhost:4173/?as=<id>` to
+sign in as a demo user without the picker: Ananya 1 (agent, APAC), Rohit 2 (agent, MEA and
+Europe), Meera 3 (Escalation Manager), Arjun 4 (lead), Priya 5 / Omar 6 / Ingrid 7
+(requesters for Skyline, Desert Rose, Nordvik). `npm test` runs the same five journeys over
+the API (`test/journeys.js`), so each step below is also an automated check.
+
+**A. Context and linkage (about 45 s)**
+1. `?as=5` (Priya, Skyline Travels). New ticket: booking `TBOH-88213`, intent Refund delay,
+   title "Refund query for TBOH-88213". Submit.
+2. `?as=1` (Ananya). Open the new ticket. The case panel lists the three earlier contacts
+   (T-1001, T-1002, T-1003) with the reason "Same booking (TBOH-88213)". Intent is already
+   classified.
+
+**B. Routing (about 45 s)**
+1. `?as=6` (Omar, Desert Rose). Create a P1 "Urgent: group cancellation terms" with a check-in
+   two days out.
+2. `?as=4` (Arjun, lead). Open it and press Auto-route. Rohit (MEA) gets it, and the
+   ownership audit says: MEA region match, P1 priority, active load, owner.
+3. Optional: mark Rohit unavailable in the queue, route again, see the fallback reason.
+
+**C. Side conversation survives a transfer (about 60 s)**
+1. `?as=1`. Open T-1008. The ticket moved from Rohit to Ananya at a shift handover. The
+   external thread "Voucher for TBOH-88502 pickup" went to the supplier desk and the
+   requester, and the supplier replied through the simulated portal.
+2. Set the owner back to Rohit, then post a message in the thread. The recipient line stays
+   the same two people after the transfer.
+3. `?as=7` (another agency) cannot open T-1008. `?as=5` (Priya, a recipient) can read it.
+
+**D. SLA, escalate, work the queue (about 60 s)**
+1. `?as=4`, Lead overview: 2 tickets at risk, 1 breached. T-1007 (P1, check-in in two days)
+   is at risk.
+2. `?as=1`. Open T-1007, type a reason, press Escalate to Escalation Manager.
+3. `?as=3` (Meera). Her queue shows T-1009 (already waiting) and T-1007. She cannot open
+   other tickets. Move T-1009 to Pending with a note. The escalation is its own timeline event.
+
+**E. Insights and data (about 30 s)**
+1. `?as=4`, Weekly insights: themes ranked by ticket count, with sample tickets. Ops tags
+   (T-1003 refund and payment, T-1006 with a bug reference) count alongside default intents.
+2. Export matching tickets as CSV from the queue (streams every row, no cutoff) and open
+   Data retention & archive policy.
+
+What is simulated: supplier and requester messages are never sent anywhere, agent
+availability is a toggle, and demo sign-in is impersonable by design (`npm run
+start:secured` switches to verified Firebase sign-in).
+
+## Architecture and cost
+
+```
+ browser (vanilla JS, no build step)
+     |  HTTP + Server-Sent Events (/api/events)
+ Express app (server.js)
+     |-- auth.js, access.js      demo or Firebase identity, role and agency scope on every route
+     |-- intent.js, sla.js       offline Naive Bayes intent, travel-aware SLA policy
+     |-- collaboration.js        routing, ownership audit, side conversations
+     |-- travel.js, portal.js    escalation, insights, simulated supplier portal
+     |-- webhooks.js, csat.js, macros.js   local-only webhooks, CSAT, canned replies
+     `-- better-sqlite3 (one file)   tickets, links, activity, threads, audit
+```
+
+Cost of this build: no per-seat or per-add-on licence, no per-call API, no model calls, no
+paid services. It runs as one Node process and one SQLite file, and every feature in the
+checklist above ships in the same repository. Linking, routing, SLA, side conversations,
+insights, export, webhooks, CSAT and macros are code in this repo rather than separately
+priced add-ons or metered APIs. This page does not quote any vendor's prices. To compare
+with a priced suite, count the add-ons and API calls that suite charges for the same
+features. Limits: single tenant, SQLite (the scale path is documented under MVP-6), and
+simulated outbound messaging.
 
 ## Demo users (demo auth, as the brief allows)
 

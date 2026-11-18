@@ -104,3 +104,4 @@ linkTickets(1002, 1003, 'Same booking (TBOH-88213) · Same agency + intent (Refu
 linkTickets(1001, 1003, 'Same booking (TBOH-88213) · Same agency + intent (Refund delay)', 1);
 
 console.log('Seeded: 3 agencies, 7 users, 7 tickets, 3 links (refund case TBOH-88213).');
+if (process.argv.includes('--demo')) require('./demo-data');
