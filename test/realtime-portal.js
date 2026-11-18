@@ -17,14 +17,18 @@ const server=app.listen(0,async()=>{
  const call=async(path,user=1,body,method)=>{const r=await fetch(base+'/api'+path,{method:method||(body?'POST':'GET'),headers:{'Content-Type':'application/json','X-User-Id':String(user)},body:body?JSON.stringify(body):undefined});return {status:r.status,data:await r.json().catch(()=>({}))};};
  try{
   // ---- Real-time sync ----
-  const bad=http.get(base+'/api/events',(res)=>{check('SSE without credentials is 401',res.statusCode===401);res.resume();
-   http.get(base+'/api/events?user=99',(res2)=>{check('SSE with unknown user is 401',res2.statusCode===401);res2.resume();});});
-  const agent=openEvents(base+'/api/events?user=1');
-  const priya=openEvents(base+'/api/events?user=5');
+  // Credentials travel in headers only; query-string credentials are never accepted.
+  await new Promise((done)=>{http.get(base+'/api/events',(res)=>{check('SSE without credentials is 401',res.statusCode===401);res.resume();done();});});
+  await new Promise((done)=>{http.get(base+'/api/events?user=1',(res)=>{check('SSE ignores query-string credentials (401)',res.statusCode===401);res.resume();done();});});
+  await new Promise((done)=>{http.get(base+'/api/events?token=anything',(res)=>{check('SSE ignores query-string token (401)',res.statusCode===401);res.resume();done();});});
+  await new Promise((done)=>{http.get(base+'/api/events',{'X-User-Id':'99'},(res)=>{check('SSE with unknown user is 401',res.statusCode===401);res.resume();done();});});
+  const agent=openEvents(base+'/api/events',{'X-User-Id':'1'});
+  const priya=openEvents(base+'/api/events',{'X-User-Id':'5'});
   const headerAuth=openEvents(base+'/api/events',{'X-User-Id':'4'});
   await sleep(400);
   check('agent stream says hello',agent.events.some(e=>e.event==='hello'));
   check('requester stream says hello',priya.events.some(e=>e.event==='hello'));
+  check('hello advertises the bounded connection age',agent.events.some(e=>e.event==='hello'&&JSON.parse(e.data).max_age_ms>0));
   check('header auth also works on the events endpoint',headerAuth.events.some(e=>e.event==='hello'));
   // Requester creates a ticket -> both agent and the creating requester see it.
   const created=await call('/tickets',5,{title:'Realtime test: refund chase',description:'Refund still not received, client chasing.',tboh:'TBOH-88213',priority:'P2',intent_id:'refund_delay'});
@@ -81,7 +85,7 @@ const server=app.listen(0,async()=>{
   const internal=(await call('/tickets/1006/threads',1,{subject:'Internal',visibility:'internal',body:'ops only',recipient_ids:[1]})).data;
   check('portal link refuses internal thread',(await call(`/tickets/1006/threads/${internal.id}/portal-links`,1,{contact_id:101})).status===400);
   const link=(await call(`/tickets/1006/threads/${th.id}/portal-links`,1,{contact_id:101})).data;
-  check('portal link created with simulation label',/^\/portal\/[0-9a-f]{48}$/.test(link.url)&&link.simulation===true);
+  check('portal link created with simulation label and expiry',/^\/portal\/[0-9a-f]{48}$/.test(link.url)&&link.simulation===true&&typeof link.expires_at==='string'&&link.expires_at.length===19);
   const again=(await call(`/tickets/1006/threads/${th.id}/portal-links`,1,{contact_id:101})).data;
   check('portal link creation is idempotent',again.url===link.url);
   check('portal link logged on timeline',(await call('/tickets/1006')).data.timeline.some(e=>e.type==='portal_link'));
@@ -105,6 +109,19 @@ const server=app.listen(0,async()=>{
   const page=await fetch(base+'/portal/'+token);
   const html=await page.text();
   check('portal page served with simulation banner',page.status===200&&/Simulated portal for demo purposes only/.test(html));
+  // Expiry and revocation bound the capability.
+  check('requester cannot revoke a portal link',(await call(`/tickets/1006/threads/${th.id}/portal-links/revoke`,5,{contact_id:101})).status===403);
+  check('revoke unknown link is 404',(await call(`/tickets/1006/threads/${th.id}/portal-links/revoke`,1,{contact_id:102})).status===404);
+  check('ops revokes the link',(await call(`/tickets/1006/threads/${th.id}/portal-links/revoke`,1,{contact_id:101})).data.revoked===true);
+  check('revoked token stops working immediately',(await fetch(base+'/portal/api/'+token)).status===404);
+  check('revocation logged on timeline',(await call('/tickets/1006')).data.timeline.some(e=>e.type==='portal_link_revoked'));
+  const renewed=(await call(`/tickets/1006/threads/${th.id}/portal-links`,1,{contact_id:101})).data;
+  check('re-create un-revokes and keeps the token',renewed.url===link.url&&(await fetch(base+'/portal/api/'+token)).status===200);
+  const {db}=require('../db');
+  db.prepare("UPDATE portal_links SET expires_at=datetime('now','-1 hour') WHERE thread_id=? AND contact_id=101").run(th.id);
+  check('expired token stops working',(await fetch(base+'/portal/api/'+token)).status===404);
+  const renewed2=(await call(`/tickets/1006/threads/${th.id}/portal-links`,1,{contact_id:101})).data;
+  check('re-create renews an expired link',renewed2.url===link.url&&renewed2.expires_at>link.expires_at&&(await fetch(base+'/portal/api/'+token)).status===200);
   agent.close();priya.close();
   console.log(`All ${pass} realtime/intent/portal checks passed.`);process.exit(0);
  }catch(e){console.error(e);process.exit(1);}

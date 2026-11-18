@@ -22,7 +22,8 @@ module.exports = (app) => {
       FROM portal_links pl
       JOIN side_threads st ON st.id = pl.thread_id
       JOIN side_contacts c ON c.id = pl.contact_id
-      WHERE pl.token = ? AND st.visibility = 'external'`).get(tok);
+      WHERE pl.token = ? AND st.visibility = 'external'
+        AND pl.revoked_at IS NULL AND pl.expires_at > datetime('now')`).get(tok);
   }
 
   function threadJson(link) {

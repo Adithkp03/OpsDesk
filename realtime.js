@@ -28,6 +28,13 @@ function publish(ticketId, type) {
   }
 }
 
+// Connections are bounded: the server ends each stream after MAX_AGE and the
+// client reconnects with a fresh credential. Firebase ID tokens live 1 hour;
+// ending at 55 minutes means a stream never outlives the token that authorized
+// it, and a revoked/disabled account loses live access at the next reconnect
+// (public-cert verification cannot call checkRevoked without a service account).
+const MAX_AGE_MS = 55 * 60 * 1000;
+
 function subscribe(req, res, user) {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -35,10 +42,13 @@ function subscribe(req, res, user) {
     Connection: 'keep-alive',
     'X-Accel-Buffering': 'no',
   });
-  res.write(`event: hello\ndata: ${JSON.stringify({ ok: true })}\n\n`);
+  res.write(`event: hello\ndata: ${JSON.stringify({ ok: true, max_age_ms: MAX_AGE_MS })}\n\n`);
   clients.set(res, { userId: user.id, role: user.role });
   const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* closed */ } }, 25000);
-  req.on('close', () => { clearInterval(ping); clients.delete(res); });
+  const bound = setTimeout(() => {
+    try { res.write(`event: bye\ndata: ${JSON.stringify({ reason: 'max_age' })}\n\n`); res.end(); } catch { /* closed */ }
+  }, MAX_AGE_MS);
+  req.on('close', () => { clearInterval(ping); clearTimeout(bound); clients.delete(res); });
 }
 
 function clientCount() { return clients.size; }

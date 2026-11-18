@@ -52,19 +52,16 @@ app.get('/api/whoami', currentUser, (req, res) => {
   res.json(u);
 });
 
-// --- Real-time sync (SSE). EventSource cannot set request headers, so this
-// ONE endpoint also accepts the same credentials as query parameters
-// (?user= demo id / ?token= firebase ID token, exactly what the headers carry).
-// Every other API route stays header-strict. Events are role-scoped per
-// connection: org roles receive all ticket events; requesters only their own
-// created tickets (see realtime.js). Payloads carry ids only; clients re-fetch
-// their own scoped views.
+// --- Real-time sync (SSE). Header-authenticated like every other route - no
+// credentials in query strings (URLs end up in logs). The client streams this
+// endpoint with fetch() + Authorization/X-User-Id headers and falls back to
+// authenticated polling when streaming is unavailable. Events are role-scoped
+// per connection: org roles receive all ticket events; requesters only their
+// own created tickets (see realtime.js). Payloads carry ids only; clients
+// re-fetch their own scoped views. Connections are bounded (see realtime.js)
+// so a stream never outlives the credential that authorized it by much.
 const realtime = require('./realtime');
-app.get('/api/events', (req, res, next) => {
-  if (req.query.user !== undefined && !req.header('X-User-Id')) req.headers['x-user-id'] = String(req.query.user);
-  if (req.query.token !== undefined && !req.header('Authorization')) req.headers['authorization'] = 'Bearer ' + String(req.query.token);
-  next();
-}, currentUser, (req, res) => realtime.subscribe(req, res, req.user));
+app.get('/api/events', currentUser, (req, res) => realtime.subscribe(req, res, req.user));
 
 // --- Intent suggestion (rules-based, overridable) ---
 app.post('/api/intents/suggest', currentUser, (req, res) => {

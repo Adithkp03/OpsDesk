@@ -6,7 +6,12 @@ module.exports=(app,{currentUser,canSeeAll,getTicketScoped})=>{
  CREATE TABLE IF NOT EXISTS side_threads(id INTEGER PRIMARY KEY,ticket_id INTEGER NOT NULL REFERENCES tickets(id),subject TEXT NOT NULL,visibility TEXT NOT NULL CHECK(visibility IN('internal','external')),created_by INTEGER NOT NULL REFERENCES users(id),created_at TEXT NOT NULL DEFAULT(datetime('now')));
  CREATE TABLE IF NOT EXISTS side_recipients(thread_id INTEGER REFERENCES side_threads(id),contact_id INTEGER REFERENCES side_contacts(id),PRIMARY KEY(thread_id,contact_id));
  CREATE TABLE IF NOT EXISTS side_messages(id INTEGER PRIMARY KEY,thread_id INTEGER NOT NULL REFERENCES side_threads(id),author_id INTEGER REFERENCES users(id),author_contact_id INTEGER REFERENCES side_contacts(id),via TEXT NOT NULL DEFAULT 'ops' CHECK(via IN('ops','portal')),body TEXT NOT NULL,recipient_snapshot TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT(datetime('now')),CHECK(author_id IS NOT NULL OR author_contact_id IS NOT NULL));
- CREATE TABLE IF NOT EXISTS portal_links(id INTEGER PRIMARY KEY,thread_id INTEGER NOT NULL REFERENCES side_threads(id),contact_id INTEGER NOT NULL REFERENCES side_contacts(id),token TEXT NOT NULL UNIQUE,created_by INTEGER NOT NULL REFERENCES users(id),created_at TEXT NOT NULL DEFAULT(datetime('now')),UNIQUE(thread_id,contact_id));`);
+ CREATE TABLE IF NOT EXISTS portal_links(id INTEGER PRIMARY KEY,thread_id INTEGER NOT NULL REFERENCES side_threads(id),contact_id INTEGER NOT NULL REFERENCES side_contacts(id),token TEXT NOT NULL UNIQUE,created_by INTEGER NOT NULL REFERENCES users(id),created_at TEXT NOT NULL DEFAULT(datetime('now')),expires_at TEXT,revoked_at TEXT,UNIQUE(thread_id,contact_id));`);
+ // Migration: first portal release lacked expiry/revocation. Add both and bound
+ // any pre-existing link to 72h from its creation.
+ if(!db.prepare('PRAGMA table_info(portal_links)').all().some(c=>c.name==='expires_at')){
+  db.exec(`ALTER TABLE portal_links ADD COLUMN expires_at TEXT; ALTER TABLE portal_links ADD COLUMN revoked_at TEXT; UPDATE portal_links SET expires_at=datetime(created_at,'+72 hours') WHERE expires_at IS NULL;`);
+ }
  // Migration: pre-portal databases have side_messages without via/author_contact_id
  // and a NOT NULL author_id. Rebuild the table, preserving every message.
  if(!db.prepare('PRAGMA table_info(side_messages)').all().some(c=>c.name==='via')){
@@ -76,11 +81,25 @@ module.exports=(app,{currentUser,canSeeAll,getTicketScoped})=>{
   const isRecipient=c&&db.prepare('SELECT 1 FROM side_recipients WHERE thread_id=? AND contact_id=?').get(th.id,contactId);
   if(!c||c.kind!=='supplier'||!isRecipient)return res.status(400).json({error:'Portal links go to supplier recipients of this thread only'});
   let link=db.prepare('SELECT * FROM portal_links WHERE thread_id=? AND contact_id=?').get(th.id,contactId);
-  if(link)return res.json({contact_id:c.id,contact_name:c.name,url:'/portal/'+link.token,simulation:true,note:'Simulated supplier portal. The link opens a demo page; nothing is sent outside OpsDesk.'});
-  db.prepare('INSERT INTO portal_links(thread_id,contact_id,token,created_by) VALUES(?,?,?,?)').run(th.id,contactId,require('crypto').randomBytes(24).toString('hex'),req.user.id);
+  if(link){
+   // Re-creating renews an expired link and un-revokes a revoked one; the token stays stable.
+   db.prepare("UPDATE portal_links SET revoked_at=NULL,expires_at=datetime('now','+72 hours') WHERE id=? AND (revoked_at IS NOT NULL OR expires_at<=datetime('now'))").run(link.id);
+   link=db.prepare('SELECT * FROM portal_links WHERE thread_id=? AND contact_id=?').get(th.id,contactId);
+   return res.json({contact_id:c.id,contact_name:c.name,url:'/portal/'+link.token,expires_at:link.expires_at,simulation:true,note:'Simulated supplier portal. The link opens a demo page; nothing is sent outside OpsDesk. Links expire 72h after creation and can be revoked.'});
+  }
+  db.prepare("INSERT INTO portal_links(thread_id,contact_id,token,created_by,expires_at) VALUES(?,?,?,?,datetime('now','+72 hours'))").run(th.id,contactId,require('crypto').randomBytes(24).toString('hex'),req.user.id);
   link=db.prepare('SELECT * FROM portal_links WHERE thread_id=? AND contact_id=?').get(th.id,contactId);
-  logActivity(th.ticket_id,req.user.id,'portal_link',`Supplier portal link created for ${c.name} (simulated)`);
-  res.status(201).json({contact_id:c.id,contact_name:c.name,url:'/portal/'+link.token,simulation:true,note:'Simulated supplier portal. The link opens a demo page; nothing is sent outside OpsDesk.'});
+  logActivity(th.ticket_id,req.user.id,'portal_link',`Supplier portal link created for ${c.name} (simulated, expires ${link.expires_at} UTC)`);
+  res.status(201).json({contact_id:c.id,contact_name:c.name,url:'/portal/'+link.token,expires_at:link.expires_at,simulation:true,note:'Simulated supplier portal. The link opens a demo page; nothing is sent outside OpsDesk. Links expire 72h after creation and can be revoked.'});
+ });
+ // Revoke a portal link (ops only): the token stops working immediately.
+ app.post('/api/tickets/:id/threads/:threadId/portal-links/revoke',currentUser,(req,res)=>{
+  if(!ops(req,res))return;const th=threadAccess(req,res);if(!th)return;
+  const contactId=Number((req.body||{}).contact_id);
+  const link=Number.isInteger(contactId)?db.prepare('SELECT * FROM portal_links WHERE thread_id=? AND contact_id=?').get(th.id,contactId):null;
+  if(!link)return res.status(404).json({error:'No portal link for that recipient'});
+  if(!link.revoked_at){db.prepare("UPDATE portal_links SET revoked_at=datetime('now') WHERE id=?").run(link.id);logActivity(th.ticket_id,req.user.id,'portal_link_revoked','Supplier portal link revoked (simulated)');}
+  res.json({contact_id:contactId,revoked:true,simulation:true});
  });
  return {ownership};
 };
