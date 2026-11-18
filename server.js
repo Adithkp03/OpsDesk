@@ -6,7 +6,7 @@ const {sla}=require('./travel');
 const {isOps,canRead,scope}=require('./access');
 
 const app = express();
-app.use(express.json({ limit: '256kb' }));
+app.use(express.json({ limit: '256kb', verify: (req, res, buf) => { req.rawBody = buf; } }));
 app.use('/api',(req,res,next)=>{res.set('Cache-Control','no-store');next();});
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -231,6 +231,9 @@ app.get('/api/tickets/:id', currentUser, (req, res) => {
   res.json({ ticket:{...ticket,sla:sla(ticket)}, links, timeline:visibleTimeline });
 });
 
+const csat = require('./csat')(app, { currentUser, getTicketScoped });
+require('./macros')(app, { currentUser, getTicketScoped });
+require('./webhooks')(app, { currentUser });
 const {ownership} = require('./collaboration')(app,{currentUser,canSeeAll,getTicketScoped});
 require('./portal')(app); // simulated supplier portal: token links for external threads
 const {escalate}=require('./travel').setup(app,{currentUser,canSeeAll,getTicketScoped,ownership});
@@ -249,6 +252,7 @@ app.post('/api/tickets/:id/status', currentUser, (req, res) => {
   // Escalated was handled above as an atomic EM handover.
   const type = 'status_changed';
   logActivity(ticket.id, req.user.id, type, `${ticket.status} -> ${next}${note ? ': ' + note : ''}`);
+  csat.onStatusChange(ticket, next, req.user);
   res.json({ id: ticket.id, status: next });
 });
 

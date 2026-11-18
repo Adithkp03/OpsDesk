@@ -414,3 +414,27 @@ permissions (ops-only, external-only, supplier-recipient-only), live-link
 idempotency, capability ROTATION on renewal after revoke/expiry (prior URLs stay
 rejected), sanitized portal view, exactly one message per portal reply, portal
 reply attribution and live event, bad-token 404s, and the simulation banner.
+
+## Webhooks, CSAT and macros (local / simulated)
+
+Everything here runs on this machine only. No email is sent, no external service is called.
+
+### Webhooks for ticket create / update
+- Events: `ticket.created` and `ticket.updated` (status, owner, intent, link, thread, CSAT... `change.type` names the activity).
+- Open **Webhooks** in the header (leads add, pause, rotate and delete endpoints; all ops can read the delivery log).
+- **Destinations are limited to this machine** (`localhost`, `127.0.0.1`, `::1`). Other hosts are refused when saving and again at send time; redirects are never followed. Sending anywhere else needs a deliberate code change after an owner decision. This is not enabled.
+- Payload: event id, time, and for the ticket only `id, status, priority, intent_id, agency_id, assigned_to` plus `change.type`. No titles, descriptions, messages, booking refs or names.
+- Signing: each endpoint has its own secret (shown once). Header `X-OpsDesk-Signature: t=<unix>,v1=<hex>` where `v1` is HMAC-SHA256 of `"<t>.<raw body>"`. Receivers should reject stale timestamps and de-duplicate on the event id. Secrets are stored in the local SQLite file because signing needs them; protect that file like any credential.
+- Delivery: queued in SQLite, at-least-once, not ordered, 4 attempts (waits 2s, 10s, 60s), 3s timeout. Pending retries survive a restart. Failed deliveries can be redelivered by a lead.
+- Offline test receiver: `POST /webhook-sink` verifies the signature. Add `?fail=2` to make it refuse the first two attempts of each delivery and watch the retries.
+- Tuning for tests: `OPSDESK_WEBHOOK_BACKOFF_MS`, `OPSDESK_WEBHOOK_MAX_ATTEMPTS`, `OPSDESK_WEBHOOK_TIMEOUT_MS`.
+
+### CSAT after resolve
+- Moving a ticket to Resolved/Closed requests a 1-5 rating (+ optional comment) from the requester who opened it. It appears as a prompt on the ticket and a timeline entry marked simulated.
+- Only that requester can answer, only while the ticket is resolved, once per resolution. Reopening voids an unanswered survey; resolving again asks again. Tickets opened by ops staff are skipped (logged).
+- Ops see answers on the ticket and a summary page (**CSAT**): average, response rate, score distribution, by intent, by owner, low scores.
+
+### Macros / canned replies with intent-aware suggestions
+- Starter macros exist per intent plus general ones. Placeholders: `{{ticket_ref}} {{booking_ref}} {{requester_name}} {{agency}} {{agent_name}} {{intent}} {{check_in_date}} {{last_cancel_date}}`. Missing values show as `[bracketed]` gaps and are reported.
+- Suggestions rank by the ticket's intent, then by the intent the conversation points to when it differs (same rule-based suggester as "Re-check intent"), with the reason shown. A conversation-based suggestion tells the agent to review the intent first and never changes it.
+- A macro only **fills a draft** in the thread reply box. The agent edits it and sends with the normal button.
