@@ -86,6 +86,22 @@ const server = app.listen(0, async () => {
     ok('E: insights list themes for this week (' + themes.length + ')', themes.length >= 3);
     ok('E: ops theme tags show up (refund delay counted from a tagged ticket)', themes.some(t => t.id === 'refund_delay' && t.count >= 1));
     ok('E: requesters cannot open insights', (await get(PRIYA, '/api/insights')).status === 403);
+    const cv = ins.conversation;
+    ok('E: conversation insights are present with coverage', cv && cv.coverage.tickets_read >= 9 && cv.coverage.with_thread_messages >= 2);
+    const refundTheme = cv.themes.find(t => t.id === 'refund_delay');
+    const s1002 = refundTheme && refundTheme.samples.find(x => x.id === 1002);
+    ok('E: ticket 1002 is hand-tagged "other" but its wording says refund delay, flagged not tagged yet with evidence', s1002 && s1002.not_tagged === true && s1002.evidence.length > 0);
+    const inv = cv.themes.find(t => t.id === 'inventory_sync');
+    ok('E: inventory sync theme for 1006 is read from the side conversation', inv && inv.samples.some(x => x.id === 1006 && x.from_thread));
+    ok('E: recurring phrase across tickets is surfaced (supplier allotment)', cv.recurring_phrases.some(p => p.phrase === 'supplier allotment' && p.tickets >= 2));
+    ok('E: ambiguous tickets abstain instead of forcing a theme', cv.coverage.abstained >= 1);
+    const fb2 = await (await get(ARJUN, '/api/tickets/1002/feedback')).json();
+    ok('E: suggestions never change saved tags', JSON.stringify(fb2.themes) === JSON.stringify(['other']));
+    ok('E: EM sees conversation insights only for the escalation queue', (await (await get(MEERA, '/api/insights')).json()).conversation.coverage.tickets_in_week <= 2);
+    // Scale guard: link fan-out is capped (same agency + intent links at most 5 recent open tickets).
+    let last;
+    for (let i = 0; i < 8; i++) last = await (await post(PRIYA, '/api/tickets', { title: 'Visa letter query ' + i, description: 'Visa support letter has not arrived', agency_id: 1, priority: 'P3', intent_id: 'documentation' })).json();
+    ok('Scale: intent links are capped at 5 per new ticket (got ' + last.linked.length + ')', last.linked.length > 0 && last.linked.length <= 5);
     const csv = await (await get(ARJUN, '/api/exports/tickets.csv')).text();
     const rows = csv.trim().split('\n').length - 1;
     ok('E: CSV export returns every ticket (' + rows + ' rows)', rows >= 10);

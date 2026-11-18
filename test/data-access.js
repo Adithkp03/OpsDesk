@@ -86,7 +86,8 @@ const server=app.listen(0,async()=>{const base='http://127.0.0.1:'+server.addres
  for(const s of ['+SUM(1,2)','-2+3','@SUM(A1)','\t=1','  =1','\r=1','\n=1'])ok('formula prefix neutralized '+JSON.stringify(s),csvCell(s).startsWith('"\''));
  ok('ordinary text not changed',csvCell('normal title')==='"normal title"');
  ok('numeric values preserved',csvCell(123)==='"123"');
- const repeated=await call('/tickets',5);ok('requester large list remains own scope',repeated.data.tickets.length>1700&&repeated.data.tickets.every(t=>t.created_by===5&&t.agency_id===1));
+ const repeated=await call('/tickets',5);ok('requester large list remains own scope',repeated.data.total>1700&&repeated.data.tickets.length===200&&repeated.data.has_more===true&&repeated.data.tickets.every(t=>t.created_by===5&&t.agency_id===1));
+ const pg2=await call('/tickets?limit=1000&offset=1000',5);ok('queue pages with limit and offset, same total, own scope only',pg2.data.total===repeated.data.total&&pg2.data.tickets.length===Math.min(1000,pg2.data.total-1000)&&pg2.data.tickets.every(t=>t.created_by===5)&&new Set([...repeated.data.tickets,...pg2.data.tickets].map(t=>t.id)).size===repeated.data.tickets.length+pg2.data.tickets.length);
  const lead=(await call('/lead',4)).data;ok('lead report not3K capped',lead.counts.total===3513&&Object.values(lead.statuses).reduce((a,b)=>a+b,0)===3513);
  console.log(`All ${pass} MVP6+7 checks passed.`);process.exit(0);
 }catch(e){console.error(e);process.exit(1);}});
