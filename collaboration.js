@@ -82,8 +82,13 @@ module.exports=(app,{currentUser,canSeeAll,getTicketScoped})=>{
   if(!c||c.kind!=='supplier'||!isRecipient)return res.status(400).json({error:'Portal links go to supplier recipients of this thread only'});
   let link=db.prepare('SELECT * FROM portal_links WHERE thread_id=? AND contact_id=?').get(th.id,contactId);
   if(link){
-   // Re-creating renews an expired link and un-revokes a revoked one; the token stays stable.
-   db.prepare("UPDATE portal_links SET revoked_at=NULL,expires_at=datetime('now','+72 hours') WHERE id=? AND (revoked_at IS NOT NULL OR expires_at<=datetime('now'))").run(link.id);
+   // A live link is idempotent (same URL returned). Re-creating a REVOKED or
+   // EXPIRED link mints a fresh capability: the old URL stays dead forever.
+   const stale=link.revoked_at||db.prepare("SELECT expires_at<=datetime('now') AS e FROM portal_links WHERE id=?").get(link.id).e;
+   if(stale){
+    db.prepare("UPDATE portal_links SET token=?,revoked_at=NULL,expires_at=datetime('now','+72 hours') WHERE id=?").run(require('crypto').randomBytes(24).toString('hex'),link.id);
+    logActivity(th.ticket_id,req.user.id,'portal_link',`Supplier portal link renewed for ${c.name} with a fresh URL (simulated; old URL stays disabled)`);
+   }
    link=db.prepare('SELECT * FROM portal_links WHERE thread_id=? AND contact_id=?').get(th.id,contactId);
    return res.json({contact_id:c.id,contact_name:c.name,url:'/portal/'+link.token,expires_at:link.expires_at,simulation:true,note:'Simulated supplier portal. The link opens a demo page; nothing is sent outside OpsDesk. Links expire 72h after creation and can be revoked.'});
   }

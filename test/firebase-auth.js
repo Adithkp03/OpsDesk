@@ -64,6 +64,35 @@ const server = app.listen(0, async () => {
     const lead = await call('/lead', 'test-uid-arjun');
     ok('lead report allowed for lead', lead.status === 200 && lead.data.counts.total >= 8);
 
+    // Real-time stream lifetime tracks the VERIFIED token expiry (30s margin),
+    // capped at 55 minutes - not assumed to be one hour from connection.
+    const sse = (token, headers) => new Promise((resolve) => {
+      const h = token ? { Authorization: 'Bearer ' + token } : (headers || {});
+      const req = require('http').get(base + '/api/events', { headers: h }, (res) => {
+        let buf = '';
+        res.on('data', (c) => {
+          buf += c;
+          const i = buf.indexOf('\n\n');
+          if (i >= 0 || !res.headers['content-type']?.includes('event-stream')) {
+            if (i >= 0 || buf.includes('}')) { req.destroy(); resolve({ status: res.statusCode, head: buf.slice(0, i >= 0 ? i : buf.length) }); }
+          }
+        });
+        res.on('end', () => resolve({ status: res.statusCode, head: buf }));
+      });
+      req.on('error', () => {});
+    });
+    const helloAge = (r) => { const m = /max_age_ms":(\d+)/.exec(r.head); return m ? Number(m[1]) : null; };
+    let r = await sse('test-uid-ananya');
+    ok('no-exp token gets the 55-minute cap', r.status === 200 && helloAge(r) === 3300000);
+    r = await sse('test-uid-ananya-exp1800');
+    ok('stream bounded by token exp minus margin, not the cap', r.status === 200 && helloAge(r) > 1700000 && helloAge(r) <= 1770000);
+    r = await sse('test-uid-ananya-exp10');
+    ok('almost-expired token refused so the client refreshes', r.status === 401);
+    r = await sse('test-uid-stranger-exp1800');
+    ok('unprovisioned token still 401 on events', r.status === 401);
+    r = await new Promise((resolve) => { const q = require('http').get(base + '/api/events?token=test-uid-ananya', (res) => { res.resume(); resolve({ status: res.statusCode }); }); q.on('error', () => {}); });
+    ok('query-string token rejected in secured mode', r.status === 401);
+
     console.log('All ' + pass + ' secured-auth checks passed.');
     server.close();
   } catch (e) { console.error(e); process.exit(1); }

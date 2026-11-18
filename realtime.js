@@ -28,26 +28,35 @@ function publish(ticketId, type) {
   }
 }
 
-// Connections are bounded: the server ends each stream after MAX_AGE and the
-// client reconnects with a fresh credential. Firebase ID tokens live 1 hour;
-// ending at 55 minutes means a stream never outlives the token that authorized
-// it, and a revoked/disabled account loses live access at the next reconnect
-// (public-cert verification cannot call checkRevoked without a service account).
+// Connections are bounded by the SHORTER of MAX_AGE and the verified token's
+// own expiry (minus a small margin): a stream opened with an almost-expired
+// token closes when that token expires, not 55 minutes later. On expiry the
+// client reconnects with a fresh token (Firebase getIdToken auto-refresh), so
+// live access tracks credential validity. A revoked/disabled account loses API
+// access when its token expires and live access at the next reconnect (public-
+// cert verification cannot call checkRevoked without a service account).
 const MAX_AGE_MS = 55 * 60 * 1000;
+const EXP_MARGIN_MS = 30 * 1000;
 
-function subscribe(req, res, user) {
+function subscribe(req, res, user, authExp) {
+  let maxAge = MAX_AGE_MS;
+  if (authExp) maxAge = Math.min(MAX_AGE_MS, authExp * 1000 - Date.now() - EXP_MARGIN_MS);
+  if (maxAge <= 0) {
+    // Token valid but too close to expiry: the client force-refreshes and retries.
+    return res.status(401).json({ error: 'Token expiring; refresh and retry' });
+  }
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache, no-transform',
     Connection: 'keep-alive',
     'X-Accel-Buffering': 'no',
   });
-  res.write(`event: hello\ndata: ${JSON.stringify({ ok: true, max_age_ms: MAX_AGE_MS })}\n\n`);
+  res.write(`event: hello\ndata: ${JSON.stringify({ ok: true, max_age_ms: maxAge })}\n\n`);
   clients.set(res, { userId: user.id, role: user.role });
   const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* closed */ } }, 25000);
   const bound = setTimeout(() => {
     try { res.write(`event: bye\ndata: ${JSON.stringify({ reason: 'max_age' })}\n\n`); res.end(); } catch { /* closed */ }
-  }, MAX_AGE_MS);
+  }, maxAge);
   req.on('close', () => { clearInterval(ping); clearTimeout(bound); clients.delete(res); });
 }
 

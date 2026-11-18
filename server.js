@@ -61,7 +61,7 @@ app.get('/api/whoami', currentUser, (req, res) => {
 // re-fetch their own scoped views. Connections are bounded (see realtime.js)
 // so a stream never outlives the credential that authorized it by much.
 const realtime = require('./realtime');
-app.get('/api/events', currentUser, (req, res) => realtime.subscribe(req, res, req.user));
+app.get('/api/events', currentUser, (req, res) => realtime.subscribe(req, res, req.user, req.authExp));
 
 // --- Intent suggestion (rules-based, overridable) ---
 app.post('/api/intents/suggest', currentUser, (req, res) => {

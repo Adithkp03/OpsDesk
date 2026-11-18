@@ -52,23 +52,28 @@ function rtHandleBlock(block) {
   // 'bye' (server max-age): the stream ends; the read loop exits and reconnects.
 }
 
-async function rtAuthHeaders() {
+async function rtAuthHeaders(forceRefresh) {
   if (firebaseMode()) {
     let tok = authToken();
     if (window.firebase && firebase.auth() && firebase.auth().currentUser) {
-      try { tok = await firebase.auth().currentUser.getIdToken(); setAuthToken(tok); } catch { /* keep stored token */ }
+      try { tok = await firebase.auth().currentUser.getIdToken(!!forceRefresh); setAuthToken(tok); } catch { /* keep stored token */ }
     }
     return { Authorization: 'Bearer ' + (tok || '') };
   }
   return { 'X-User-Id': me() || '' };
 }
 
-async function rtConnect() {
+async function rtConnect(forceRefreshed) {
   if (_connecting || !_running) return;
   _connecting = true;
   try {
     _controller = new AbortController();
-    const res = await fetch('/api/events', { headers: await rtAuthHeaders(), signal: _controller.signal });
+    const res = await fetch('/api/events', { headers: await rtAuthHeaders(forceRefreshed), signal: _controller.signal });
+    if ((res.status === 401 || res.status === 403) && firebaseMode() && !forceRefreshed && window.firebase && firebase.auth().currentUser) {
+      // Stored token expired or is inside the server's expiry margin: force one refresh and retry.
+      _connecting = false;
+      return rtConnect(true);
+    }
     if (res.status === 401 || res.status === 403) { rtIndicator('Offline'); _running = false; return; } // signed out / expired
     if (!res.ok || !res.body || !res.body.getReader) throw new Error('stream unavailable');
     const reader = res.body.getReader();

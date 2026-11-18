@@ -100,6 +100,7 @@ const server=app.listen(0,async()=>{
   const thread2=(await call(`/tickets/1006/threads/${th.id}`)).data;
   const pm=thread2.messages.find(m=>m.via==='portal');
   check('portal reply lands in thread as supplier',pm&&pm.author_name==='Skyline Travels supplier desk'&&pm.author_contact_name==='Skyline Travels supplier desk');
+  check('one reply POST creates exactly one portal message',thread2.messages.filter(m=>m.via==='portal').length===1);
   check('internal thread untouched by portal',(await call(`/tickets/1006/threads/${internal.id}`)).data.messages.every(m=>m.via==='ops'));
   await sleep(400);
   check('portal reply publishes realtime event',agent.events.length>portalEventsBefore&&agent.events.some(e=>e.event==='ticket'&&JSON.parse(e.data).type==='thread_reply'&&JSON.parse(e.data).ticket===1006));
@@ -116,12 +117,18 @@ const server=app.listen(0,async()=>{
   check('revoked token stops working immediately',(await fetch(base+'/portal/api/'+token)).status===404);
   check('revocation logged on timeline',(await call('/tickets/1006')).data.timeline.some(e=>e.type==='portal_link_revoked'));
   const renewed=(await call(`/tickets/1006/threads/${th.id}/portal-links`,1,{contact_id:101})).data;
-  check('re-create un-revokes and keeps the token',renewed.url===link.url&&(await fetch(base+'/portal/api/'+token)).status===200);
+  check('renewal after revoke rotates the capability',renewed.url!==link.url&&/^\/portal\/[0-9a-f]{48}$/.test(renewed.url));
+  check('prior URL stays rejected after renewal',(await fetch(base+'/portal/api/'+token)).status===404);
+  check('rotated URL works',(await fetch(base+'/portal/api/'+renewed.url.split('/').pop())).status===200);
   const {db}=require('../db');
   db.prepare("UPDATE portal_links SET expires_at=datetime('now','-1 hour') WHERE thread_id=? AND contact_id=101").run(th.id);
-  check('expired token stops working',(await fetch(base+'/portal/api/'+token)).status===404);
+  check('expired token stops working',(await fetch(base+'/portal/api/'+renewed.url.split('/').pop())).status===404);
   const renewed2=(await call(`/tickets/1006/threads/${th.id}/portal-links`,1,{contact_id:101})).data;
-  check('re-create renews an expired link',renewed2.url===link.url&&renewed2.expires_at>link.expires_at&&(await fetch(base+'/portal/api/'+token)).status===200);
+  check('renewal after expiry rotates the capability again',renewed2.url!==renewed.url&&/^\/portal\/[0-9a-f]{48}$/.test(renewed2.url));
+  check('second prior URL stays rejected',(await fetch(base+'/portal/api/'+renewed.url.split('/').pop())).status===404);
+  check('newest URL works',(await fetch(base+'/portal/api/'+renewed2.url.split('/').pop())).status===200);
+  const live=(await call(`/tickets/1006/threads/${th.id}/portal-links`,1,{contact_id:101})).data;
+  check('live link stays idempotent (no rotation)',live.url===renewed2.url);
   agent.close();priya.close();
   console.log(`All ${pass} realtime/intent/portal checks passed.`);process.exit(0);
  }catch(e){console.error(e);process.exit(1);}

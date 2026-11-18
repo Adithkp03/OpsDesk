@@ -360,13 +360,15 @@ stream. The header badge shows **Live** when the stream is connected and **Polli
 when it falls back to a 15s authenticated refresh (replaces the old fixed 60s poll).
 Zero new dependencies.
 
-Stream lifetime is bounded: the server ends each connection after 55 minutes (under
-the 1-hour Firebase ID-token lifetime) and the client reconnects with a fresh token
-(`getIdToken()` auto-refreshes near expiry), so a live stream never outlives the
-credential that authorized it by much. Note: token REVOCATION (disabling a user in
-Firebase) cannot be checked without the Admin SDK / a service account, which this
-design deliberately avoids; a revoked account loses API access when its token
-expires and loses live access at the next stream reconnect - within ~55 minutes.
+Stream lifetime is bounded by the SHORTER of 55 minutes and the verified token's
+own expiry minus a 30-second margin: a stream opened with an almost-expired token
+closes when that token expires, and a token inside the margin is refused (401) so
+the client force-refreshes (`getIdToken(true)`) and reconnects. Live access never
+outlives the credential that authorized it by more than the margin. Note: account
+REVOCATION (disabling a user in Firebase) cannot be checked without the Admin SDK /
+a service account, which this design deliberately avoids - a revoked account loses
+API access when its current token expires and live access at the next stream
+reconnect; it is not immediate.
 
 **Stronger auto-intent from conversation text.** The Naive Bayes classifier gained
 conversation-phrasing corpus examples (how intents read mid-thread: chasers,
@@ -383,8 +385,9 @@ ticket view has a "Re-check intent from conversation" button.
 
 **Supplier portal thread UX (simulated, demo-only - NOT production-ready).** An ops
 user can create a token link per supplier recipient of an EXTERNAL side thread
-(`POST .../threads/:threadId/portal-links`, idempotent - re-creating renews an
-expired link or un-revokes a revoked one, keeping the token stable). The link opens
+(`POST .../threads/:threadId/portal-links`; a live link is idempotent - same URL
+returned - while re-creating a revoked or expired link ROTATES the capability: a
+fresh token is minted and the old URL stays disabled forever). The link opens
 a standalone page (`/portal/:token`) showing just that thread - subject, ticket
 reference, sanitized messages - with a reply box. The token is the capability:
 anyone holding the link can read and reply as that supplier contact, which the page
@@ -399,14 +402,15 @@ preserved as ops messages).
 
 ### Verification
 
-`npm test`: **338 checks** (54 + 48 + 71 + 86 + 23 secured-auth + 56 new), plus the
+`npm test`: **349 checks** (54 + 48 + 71 + 86 + 28 secured-auth + 62 new), plus the
 independent real-process restart test. New coverage: SSE header-only auth (401 for
 missing/unknown credentials AND for query-string credentials in either auth mode),
-bounded stream age advertisement, live event delivery, requester event scoping (own
-tickets only), id-only payloads, conversation-weighted suggestion and unchanged
-abstention, resuggest caller scoping, apply permissions (agent/creator/
-non-creator/invalid), portal link permissions (ops-only, external-only,
-supplier-recipient-only, idempotent), sanitized portal view, portal reply
-attribution and live event, bad-token 404s, link expiry and revocation (revoked/
-expired tokens stop working immediately; re-create renews), and the simulation
-banner.
+stream lifetime bounded by the verified token exp with margin (55-min cap for
+no-exp tokens, exp-minus-margin for short-lived tokens, 401 for almost-expired
+tokens), live event delivery, requester event scoping (own tickets only), id-only
+payloads, conversation-weighted suggestion and unchanged abstention, resuggest
+caller scoping, apply permissions (agent/creator/non-creator/invalid), portal link
+permissions (ops-only, external-only, supplier-recipient-only), live-link
+idempotency, capability ROTATION on renewal after revoke/expiry (prior URLs stay
+rejected), sanitized portal view, exactly one message per portal reply, portal
+reply attribution and live event, bad-token 404s, and the simulation banner.

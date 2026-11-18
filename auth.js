@@ -49,9 +49,11 @@ if (MODE === 'firebase') {
     // Test-only verifier: token "test-<uid>" verifies as that uid. Never set this
     // outside the test suite; README documents it as test-only.
     verifier = async (token) => {
-      const m = /^test-(.+)$/.exec(token);
+      // "test-<uid>" never expires; "test-<uid>-exp<seconds>" expires that many
+      // seconds from verification (for stream-lifetime tests).
+      const m = /^test-(.+?)(?:-exp(\d+))?$/.exec(token);
       if (!m) throw new Error('bad stub token');
-      return { uid: m[1] };
+      return { uid: m[1], exp: m[2] ? Math.floor(Date.now() / 1000) + parseInt(m[2], 10) : undefined };
     };
   } else {
     if (!PROJECT_ID) throw new Error('OPSDESK_AUTH_MODE=firebase requires OPSDESK_FIREBASE_PROJECT_ID; OPSDESK_TOKEN_STUB=1 is the test-only verifier');
@@ -81,7 +83,7 @@ if (MODE === 'firebase') {
       if (payload.exp <= now || payload.iat > now + 300) throw new Error('token expired');
       if (payload.aud !== PROJECT_ID || payload.iss !== 'https://securetoken.google.com/' + PROJECT_ID) throw new Error('wrong project');
       if (!payload.sub) throw new Error('no subject');
-      return { uid: payload.sub };
+      return { uid: payload.sub, exp: payload.exp };
     };
   }
 }
@@ -95,6 +97,7 @@ function currentUser(req, res, next) {
       const user = userByUid(decoded.uid);
       if (!user) return res.status(401).json({ error: 'Account is not provisioned in OpsDesk' });
       req.user = user;
+      req.authExp = decoded.exp || null; // verified token expiry (unix seconds), when the provider asserts one
       next();
     }).catch(() => res.status(401).json({ error: 'Invalid or expired token' }));
   }
