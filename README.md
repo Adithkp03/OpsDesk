@@ -18,7 +18,10 @@ npm start       # http://localhost:4173
 
 For the demo walk-through below, start from the demo seed instead. It adds a transferred
 ticket with a supplier conversation, a ticket already in the Escalation Manager queue and
-ops theme tags. It wipes the database and ages tickets relative to the moment you run it,
+ops theme tags. **It is destructive:** `--wipe` deletes every ticket, link, activity row, user, agency,
+thread, audit row, theme tag, CSAT survey and macro in `opsdesk.db` before reseeding (webhook endpoints are kept).
+Use it on a throwaway or demo database only, never on one holding data you want to keep (copy `opsdesk.db` first,
+or point `OPSDESK_DB` at a new file). It ages tickets relative to the moment you run it,
 so run it shortly before a demo (SLA states move with real time):
 
 ```bash
