@@ -126,3 +126,10 @@ textarea.f { min-height: 110px; resize: vertical; }
 .macro-pick select { flex: 1; min-width: 0; }
 .wh-events { display: flex; gap: 18px; margin: 4px 0 12px; font-size: 13px; }
 .wh-events label { display: inline-flex; gap: 6px; align-items: center; }
+/* Phone width: let grid children shrink so long text and selects never widen the page. */
+.detail-grid > *, .card { min-width: 0; }
+select, input, textarea { max-width: 100%; }
+@media (max-width: 600px) {
+  .detail-grid .card, .card { overflow-wrap: anywhere; }
+  header, .topbar, .nav { flex-wrap: wrap; gap: 6px 10px; }
+}
