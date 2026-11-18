@@ -32,7 +32,7 @@ npm start
 Run the checks:
 
 ```bash
-npm test        # 515 checks across 10 files (restart.js counts as one scenario), including test/journeys.js which walks demo journeys A-E
+npm test        # 544 checks across 11 files (restart.js counts as one scenario), including test/journeys.js which walks demo journeys A-E
 npm run bench   # optional: 50K-ticket synthetic scale and live-update benchmark (about a minute)
 ```
 
@@ -349,6 +349,12 @@ Normal `npm run seed` refuses to overwrite an existing database; `git pull` does
   them. No model calls, no network, no per-ticket cost. Limits: bag-of-words, English only,
   small training corpus, no accuracy benchmark, reads at most the 1000 newest tickets of the
   week and the last 12 messages per ticket. It is a lead for a human, not an AI summary.
+  **Access:** the section is part of the ops-only insights API (requesters get 403). It reads
+  only threads ops can already open: the Lead and agents see the whole organization, the
+  Escalation Manager only escalation-queue tickets, so an EM never sees phrases or titles from
+  other tickets. It shows title, ticket link and a few matched keywords, never message bodies
+  or recipients. Mining treats internal and supplier-facing threads alike because ops can read
+  both; requesters never receive any of it. Covered by `test/boundaries.js`.
 - Optional product/bug reference is plain text, persisted on the feedback record. It is not
   a live issue tracker integration and does not create a bug or send a message.
 - Weekly insights are ops-only: **Monday 00:00 UTC through the current time**, based on ticket
@@ -408,7 +414,7 @@ EM's queue, save/reopen tags, insight sample navigation and requester denial.
   returned every row; creating a ticket took about 195 ms and linked the new ticket to every
   old ticket of the same agency and intent. After: lists are paged (default 200, max 1000,
   with `total` and `has_more`), link counts are computed only for the returned page, and
-  automatic links are capped (same booking: 20 most recent; same agency + intent: 5 most recent
+  automatic links are capped (same booking, same agency only: 20 most recent; same agency + intent: 5 most recent
   open tickets from the last 90 days). Missing indexes were added. The caps are policy values.
   Filters that depend on the clock (SLA state) still scan all rows before paging, which is why
   the first page is not instant at 50K.
