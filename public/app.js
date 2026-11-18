@@ -33,6 +33,7 @@ const fmtTs = (s) => new Date(s.replace(' ', 'T') + 'Z').toLocaleString('en-GB',
 const userById = (id) => (boot.users.find(u => u.id === id) || {});
 
 function signOut() {
+  rtStop();
   setMe(null); setAuthToken(null); preselected = true;
   history.replaceState(null, '', location.pathname + location.hash); route();
 }
@@ -126,6 +127,8 @@ async function viewTicket(id) {
         </dl>
         <p style="font-size:13px;color:var(--ink2);line-height:1.55">${esc(t.description)}</p>
         <div class="sla-policy"><strong>Demo SLA policy</strong><p>${esc(t.sla.reason)}</p><small>${esc(t.sla.policy)}</small></div>
+        <div class="actions" style="margin-top:10px"><button class="btn small" onclick="resuggestIntent(${t.id})">Re-check intent from conversation</button></div>
+        <div id="intentResuggest"></div>
         <div class="error-box" id="routing-error" hidden></div>
         ${u.role!=='requester'?`<div class="actions">
           <select class="f" id="statusSel" style="padding:7px 10px">
@@ -245,6 +248,29 @@ async function createTicket(ev) {
   return false;
 }
 
+// Feature: conversation-weighted intent. The server aggregates the thread
+// messages the caller may read, suggests, and only ops or the ticket creator
+// can apply a change (enforced server-side too).
+async function resuggestIntent(id) {
+  const el = document.getElementById('intentResuggest');
+  el.textContent = 'Reading conversation…';
+  try {
+    const r = await api(`/tickets/${id}/intent-resuggest`, { method: 'POST', body: {} });
+    const s = r.suggestion, t = (await api('/tickets/' + id)).ticket;
+    const u = userById(me());
+    const canApply = u.role !== 'requester' || t.created_by === u.id;
+    if (s.abstain) {
+      el.innerHTML = `<div class="suggest-box show" style="margin-top:8px"><strong>Manual review.</strong> ${esc(s.reason)}${r.sources.thread_messages_used ? '' : ' No conversation text yet; used title and description only.'}</div>`;
+      return;
+    }
+    el.innerHTML = `<div class="suggest-box show" style="margin-top:8px">Conversation suggests <strong>${esc(s.label)}</strong> (model score ${Math.round(s.confidence * 100)}%, not measured accuracy)${r.sources.thread_messages_used ? ` from ${r.sources.thread_messages_used} recent thread message${r.sources.thread_messages_used > 1 ? 's' : ''}` : ''}. Evidence: ${s.matched.map(esc).join(', ') || '—'}.${r.differs && canApply ? ` <button class="btn small" onclick="applyIntent(${id},'${s.intent_id}')">Apply</button>` : r.differs ? ' Only ops or the ticket creator can apply this.' : ' Matches the current intent.'}</div>`;
+  } catch (e) { el.innerHTML = `<div class="error-box">${esc(e.message)}</div>`; }
+}
+async function applyIntent(id, intentId) {
+  try { await api(`/tickets/${id}/intent`, { method: 'POST', body: { intent_id: intentId } }); viewTicket(id); }
+  catch (e) { alert(e.message); }
+}
+
 async function changeStatus(id) {
   const status = document.getElementById('statusSel').value;
   const note = prompt('Optional note for the timeline:') || '';
@@ -270,6 +296,7 @@ async function route() {
     try { const w = await api('/whoami'); setMe(w.id); renderWho(); }
     catch (e) { setAuthToken(null); return viewLogin(); }
   }
+  rtStart();
   if (h.startsWith('#/ticket/')) return viewTicket(parseInt(h.split('/')[2], 10));
   if (h === '#/lead') return viewLead();
   if (h === '#/data') return viewDataPolicy();

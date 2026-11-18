@@ -95,6 +95,18 @@ const TRAINING_CORPUS = [
   ['supplier_confirmation', 'pending supplier confirmation'], ['supplier_confirmation', 'follow up with the supplier'],
   ['supplier_confirmation', 'supplier has not reconfirmed'], ['supplier_confirmation', 'awaiting hotel confirmation from the supplier'],
   ['supplier_confirmation', 'chase the supplier for confirmation'], ['supplier_confirmation', 'on request with the supplier'],
+  // Conversation phrasing: how these intents actually read mid-thread (replies,
+  // follow-ups, chasers) rather than in freshly written ticket titles. Added so
+  // suggestions built from conversation text stay accurate.
+  ['refund_delay', 'any update on my refund'], ['refund_delay', 'still waiting for the money to come back'],
+  ['refund_delay', 'the client keeps asking where their refund is'], ['refund_delay', 'chasing the refund again'],
+  ['booking_amendment', 'can we move the dates to next week'], ['booking_amendment', 'guest now arrives on friday, please change the booking'],
+  ['cancellation', 'the guests are not coming anymore, cancel it'], ['cancellation', 'client pulled out of the trip'],
+  ['payment_issue', 'the amount was taken twice from the card'], ['payment_issue', 'payment went through but the booking is not confirmed'],
+  ['inventory_sync', 'your portal shows no rooms but the hotel says they have them'], ['inventory_sync', 'the rate on the site is stale'],
+  ['special_request', 'can you arrange a wheelchair at the airport'], ['special_request', 'they are celebrating their anniversary, something nice in the room'],
+  ['documentation', 'we still have not received the voucher'], ['documentation', 'please resend the confirmation letter'],
+  ['supplier_confirmation', 'the hotel has not confirmed yet'], ['supplier_confirmation', 'no reply from the property so far'],
 ];
 
 const NEGATION_CUES = new Set(['not', 'no', 'never', 'isnt', "isn't", 'dont', "don't", 'doesnt', "doesn't", 'didnt', "didn't", 'without', 'cant', "can't", 'wont', "won't", 'hardly']);
@@ -240,11 +252,11 @@ function classStrengths(featsPresent) {
   return totals;
 }
 
-function suggestIntent(title, description) {
+function suggestFromText(text) {
   const label = (id) => INTENTS.find(i => i.id === id).label;
-  const ranked = classify(`${title || ''}. ${description || ''}`);
+  const ranked = classify(text);
   const [first, second] = ranked;
-  const topFeats = featuresFromText(`${title || ''}. ${description || ''}`);
+  const topFeats = featuresFromText(text);
   const matched = second ? evidence(topFeats, first.id, second.id) : [];
 
   // Ambiguity measure that NB overconfidence can't hide: per-class discriminative
@@ -257,7 +269,7 @@ function suggestIntent(title, description) {
   // Evaluate independent coordinated requests separately so a long payment clause
   // cannot drown out a shorter voucher request. Negated actions remain marked.
   const clauseWinners = new Set();
-  for (const part of `${title || ''}. ${description || ''}`.split(/[,;.!?]|\b(?:and|also|plus|but|however|instead)\b/i)) {
+  for (const part of text.split(/[,;.!?]|\b(?:and|also|plus|but|however|instead)\b/i)) {
     const r = classify(part)[0];
     const strength = classStrengths(featuresFromText(part)).get(r.id) || 0;
     if (strength >= 2.5) clauseWinners.add(r.id);
@@ -282,4 +294,25 @@ function suggestIntent(title, description) {
   };
 }
 
-module.exports = { INTENTS, suggestIntent, TRAINING_CORPUS };
+function suggestIntent(title, description) {
+  return suggestFromText(`${title || ''}. ${description || ''}`);
+}
+
+// Conversation-weighted suggestion: the ticket title carries the strongest signal
+// (x3), the description next (x2), and accumulated conversation text (thread
+// replies, follow-ups) informs at x1, capped so a long thread cannot drown the
+// original ask. Weights repeat the text, which multiplies feature counts exactly -
+// the same evidence presented that many times. Clause splitting keeps repeated
+// segments from inventing cross-segment bigrams, and abstention is unchanged: weak
+// or mixed evidence still returns abstain, never a forced answer.
+function suggestConversation({ title, description, conversation }) {
+  const cap = (s, n) => String(s || '').slice(0, n);
+  const parts = [];
+  for (let i = 0; i < 3; i++) parts.push(cap(title, 500));
+  for (let i = 0; i < 2; i++) parts.push(cap(description, 5000));
+  const convo = cap(conversation, 8000).trim();
+  if (convo) parts.push(convo);
+  return suggestFromText(parts.filter(Boolean).join('. '));
+}
+
+module.exports = { INTENTS, suggestIntent, suggestConversation, TRAINING_CORPUS };

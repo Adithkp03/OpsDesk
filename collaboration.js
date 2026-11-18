@@ -5,7 +5,16 @@ module.exports=(app,{currentUser,canSeeAll,getTicketScoped})=>{
  CREATE TABLE IF NOT EXISTS side_contacts(id INTEGER PRIMARY KEY,name TEXT NOT NULL,address TEXT NOT NULL,agency_id INTEGER REFERENCES agencies(id),user_id INTEGER REFERENCES users(id),kind TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS side_threads(id INTEGER PRIMARY KEY,ticket_id INTEGER NOT NULL REFERENCES tickets(id),subject TEXT NOT NULL,visibility TEXT NOT NULL CHECK(visibility IN('internal','external')),created_by INTEGER NOT NULL REFERENCES users(id),created_at TEXT NOT NULL DEFAULT(datetime('now')));
  CREATE TABLE IF NOT EXISTS side_recipients(thread_id INTEGER REFERENCES side_threads(id),contact_id INTEGER REFERENCES side_contacts(id),PRIMARY KEY(thread_id,contact_id));
- CREATE TABLE IF NOT EXISTS side_messages(id INTEGER PRIMARY KEY,thread_id INTEGER NOT NULL REFERENCES side_threads(id),author_id INTEGER NOT NULL REFERENCES users(id),body TEXT NOT NULL,recipient_snapshot TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT(datetime('now')));`);
+ CREATE TABLE IF NOT EXISTS side_messages(id INTEGER PRIMARY KEY,thread_id INTEGER NOT NULL REFERENCES side_threads(id),author_id INTEGER REFERENCES users(id),author_contact_id INTEGER REFERENCES side_contacts(id),via TEXT NOT NULL DEFAULT 'ops' CHECK(via IN('ops','portal')),body TEXT NOT NULL,recipient_snapshot TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT(datetime('now')),CHECK(author_id IS NOT NULL OR author_contact_id IS NOT NULL));
+ CREATE TABLE IF NOT EXISTS portal_links(id INTEGER PRIMARY KEY,thread_id INTEGER NOT NULL REFERENCES side_threads(id),contact_id INTEGER NOT NULL REFERENCES side_contacts(id),token TEXT NOT NULL UNIQUE,created_by INTEGER NOT NULL REFERENCES users(id),created_at TEXT NOT NULL DEFAULT(datetime('now')),UNIQUE(thread_id,contact_id));`);
+ // Migration: pre-portal databases have side_messages without via/author_contact_id
+ // and a NOT NULL author_id. Rebuild the table, preserving every message.
+ if(!db.prepare('PRAGMA table_info(side_messages)').all().some(c=>c.name==='via')){
+  db.exec(`ALTER TABLE side_messages RENAME TO side_messages_old;
+  CREATE TABLE side_messages(id INTEGER PRIMARY KEY,thread_id INTEGER NOT NULL REFERENCES side_threads(id),author_id INTEGER REFERENCES users(id),author_contact_id INTEGER REFERENCES side_contacts(id),via TEXT NOT NULL DEFAULT 'ops' CHECK(via IN('ops','portal')),body TEXT NOT NULL,recipient_snapshot TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT(datetime('now')),CHECK(author_id IS NOT NULL OR author_contact_id IS NOT NULL));
+  INSERT INTO side_messages(id,thread_id,author_id,author_contact_id,via,body,recipient_snapshot,created_at) SELECT id,thread_id,author_id,NULL,'ops',body,recipient_snapshot,created_at FROM side_messages_old;
+  DROP TABLE side_messages_old;`);
+ }
  const profile=db.prepare('INSERT OR IGNORE INTO agent_profiles(user_id,regions,available) VALUES(?,?,1)');
  for(const u of db.prepare("SELECT id FROM users WHERE role='agent'").all()) profile.run(u.id,JSON.stringify(u.id===1?['APAC']:['MEA','Europe']));
  for(const u of db.prepare('SELECT * FROM users').all()) db.prepare('INSERT OR IGNORE INTO side_contacts(id,name,address,agency_id,user_id,kind) VALUES(?,?,?,?,?,?)').run(u.id,u.name,`demo-user-${u.id}@opsdesk.invalid`,u.agency_id,u.id,u.role==='requester'?'requester':'ops');
@@ -40,7 +49,7 @@ module.exports=(app,{currentUser,canSeeAll,getTicketScoped})=>{
   if(!canSeeAll(req.user)&&(th.visibility!=='external'||!db.prepare('SELECT 1 FROM side_recipients r JOIN side_contacts c ON c.id=r.contact_id WHERE r.thread_id=? AND c.user_id=?').get(th.id,req.user.id))){res.status(403).json({error:'Thread not accessible'});return null;}
   return th;
  }
- function serialize(th){return {...th,recipients:db.prepare('SELECT c.* FROM side_recipients r JOIN side_contacts c ON c.id=r.contact_id WHERE thread_id=? ORDER BY c.id').all(th.id),messages:db.prepare('SELECT m.*,u.name author_name FROM side_messages m JOIN users u ON u.id=m.author_id WHERE thread_id=? ORDER BY m.id').all(th.id).map(m=>({...m,recipients:JSON.parse(m.recipient_snapshot)})),simulation:true};}
+ function serialize(th){return {...th,recipients:db.prepare('SELECT c.* FROM side_recipients r JOIN side_contacts c ON c.id=r.contact_id WHERE thread_id=? ORDER BY c.id').all(th.id),messages:db.prepare('SELECT m.*,u.name author_name,c.name author_contact_name FROM side_messages m LEFT JOIN users u ON u.id=m.author_id LEFT JOIN side_contacts c ON c.id=m.author_contact_id WHERE thread_id=? ORDER BY m.id').all(th.id).map(m=>({...m,author_name:m.author_name||m.author_contact_name||'Unknown',recipients:JSON.parse(m.recipient_snapshot)})),simulation:true};}
  app.get('/api/tickets/:id/threads',currentUser,(req,res)=>{const t=ticket(req,res);if(!t)return;const rows=db.prepare('SELECT * FROM side_threads WHERE ticket_id=? ORDER BY id').all(t.id).filter(th=>canSeeAll(req.user)||(th.visibility==='external'&&db.prepare('SELECT 1 FROM side_recipients r JOIN side_contacts c ON c.id=r.contact_id WHERE r.thread_id=? AND c.user_id=?').get(th.id,req.user.id)));res.json({threads:rows.map(serialize),simulation:true});});
  app.post('/api/tickets/:id/threads',currentUser,(req,res)=>{
   if(!ops(req,res))return;const t=ticket(req,res);if(!t)return;const b=req.body||{};
@@ -53,7 +62,25 @@ module.exports=(app,{currentUser,canSeeAll,getTicketScoped})=>{
  app.post('/api/tickets/:id/threads/:threadId/messages',currentUser,(req,res)=>{const th=threadAccess(req,res);if(!th)return;
   if(typeof (req.body||{}).body!=='string'||!req.body.body.trim()||req.body.body.length>5000)return res.status(400).json({error:'Message required, at most 5000 characters'});
   if(Object.keys(req.body).some(k=>k!=='body'))return res.status(400).json({error:'Recipients and visibility are fixed per thread; create a separate thread for a different audience'});
-  const contacts=serialize(th).recipients;db.prepare('INSERT INTO side_messages(thread_id,author_id,body,recipient_snapshot) VALUES(?,?,?,?)').run(th.id,req.user.id,req.body.body.trim(),JSON.stringify(contacts));res.status(201).json(serialize(th));
+  const contacts=serialize(th).recipients;db.prepare("INSERT INTO side_messages(thread_id,author_id,author_contact_id,via,body,recipient_snapshot) VALUES(?,?,NULL,'ops',?,?)").run(th.id,req.user.id,req.body.body.trim(),JSON.stringify(contacts));res.status(201).json(serialize(th));
+ });
+ // Supplier portal links (simulated): a token link per supplier recipient of an
+ // external thread. The token is the capability - anyone holding it can read that
+ // thread and reply as the supplier contact on the demo page. Ops-only to create;
+ // one link per (thread, supplier), idempotent.
+ app.post('/api/tickets/:id/threads/:threadId/portal-links',currentUser,(req,res)=>{
+  if(!ops(req,res))return;const th=threadAccess(req,res);if(!th)return;
+  if(th.visibility!=='external')return res.status(400).json({error:'Portal links are only for external (supplier-facing) threads'});
+  const contactId=Number((req.body||{}).contact_id);
+  const c=Number.isInteger(contactId)?db.prepare('SELECT * FROM side_contacts WHERE id=?').get(contactId):null;
+  const isRecipient=c&&db.prepare('SELECT 1 FROM side_recipients WHERE thread_id=? AND contact_id=?').get(th.id,contactId);
+  if(!c||c.kind!=='supplier'||!isRecipient)return res.status(400).json({error:'Portal links go to supplier recipients of this thread only'});
+  let link=db.prepare('SELECT * FROM portal_links WHERE thread_id=? AND contact_id=?').get(th.id,contactId);
+  if(link)return res.json({contact_id:c.id,contact_name:c.name,url:'/portal/'+link.token,simulation:true,note:'Simulated supplier portal. The link opens a demo page; nothing is sent outside OpsDesk.'});
+  db.prepare('INSERT INTO portal_links(thread_id,contact_id,token,created_by) VALUES(?,?,?,?)').run(th.id,contactId,require('crypto').randomBytes(24).toString('hex'),req.user.id);
+  link=db.prepare('SELECT * FROM portal_links WHERE thread_id=? AND contact_id=?').get(th.id,contactId);
+  logActivity(th.ticket_id,req.user.id,'portal_link',`Supplier portal link created for ${c.name} (simulated)`);
+  res.status(201).json({contact_id:c.id,contact_name:c.name,url:'/portal/'+link.token,simulation:true,note:'Simulated supplier portal. The link opens a demo page; nothing is sent outside OpsDesk.'});
  });
  return {ownership};
 };

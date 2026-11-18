@@ -342,3 +342,55 @@ overview access, and demo-header validation. Restart re-verifies the original st
 Actual Chrome verification adds 23 checks: lead metrics, real CSV download, refresh
 persistence, retention page, EM scope and denials, requester scope and hidden
 controls, agent lead denial and user switching.
+
+## Additions: real-time sync, conversation intent, supplier portal
+
+Three user-requested capabilities on top of the secured MVP:
+
+**Real-time dashboard sync.** Every ticket mutation already funnels through one
+activity chokepoint; an in-process event bus (`realtime.js`) republishes those as
+Server-Sent Events on `GET /api/events`. EventSource cannot send headers, so that
+ONE route also accepts the same credentials as query parameters (`?user=` demo id /
+`?token=` Firebase ID token) - every other API route stays header-strict. Each
+connection is scoped server-side: agents/EMs/leads receive all ticket events;
+requesters receive events for their own created tickets only, exactly the API role
+model. Payloads carry only `{ticket id, activity type}` - the client re-fetches its
+own scoped views, so no cross-agency data travels the stream. The header badge shows
+**Live** when the stream is connected and **Polling** when it falls back to a 15s
+refresh (replaces the old fixed 60s poll). Zero new dependencies.
+
+**Stronger auto-intent from conversation text.** The Naive Bayes classifier gained
+conversation-phrasing corpus examples (how intents read mid-thread: chasers,
+follow-ups, "the hotel has not confirmed yet") and a conversation-weighted path:
+ticket title x3, description x2, accumulated thread text x1, capped so a long thread
+cannot drown the original ask. Abstention semantics are unchanged - weak or mixed
+evidence still asks for manual selection. `POST /api/tickets/:id/intent-resuggest`
+aggregates the side-thread messages the CALLER may read (ops see all threads on the
+ticket; requesters only external threads they are recipients of) and returns a
+suggestion with sources. Applying it is a separate permission-checked call
+(`POST /api/tickets/:id/intent`): ops roles, or the requester who created the
+ticket - the same manual-select owner as at creation, logged on the timeline. The
+ticket view has a "Re-check intent from conversation" button.
+
+**Supplier portal thread UX (simulated).** An ops user can create a token link per
+supplier recipient of an EXTERNAL side thread
+(`POST .../threads/:threadId/portal-links`, idempotent, supplier recipients only).
+The link opens a standalone page (`/portal/:token`) showing just that thread -
+subject, ticket reference, sanitized messages - with a reply box. The token is the
+capability: anyone holding the link can read and reply as that supplier contact,
+which the page labels; this is demo-only and nothing is sent outside OpsDesk.
+Replies land in the OpsDesk thread as `via=portal` messages attributed to the
+supplier contact and publish a live event to connected dashboards. Old databases
+migrate in place (side_messages gains via/author_contact_id; existing messages
+preserved as ops messages).
+
+### Verification
+
+`npm test`: **327 checks** (54 + 48 + 71 + 86 + 23 secured-auth + 45 new), plus the
+independent real-process restart test. New coverage: SSE auth (401 without/unknown
+credentials, header and query-param auth), live event delivery, requester event
+scoping (own tickets only), id-only payloads, conversation-weighted suggestion and
+unchanged abstention, resuggest caller scoping, apply permissions (agent/creator/
+non-creator/invalid), portal link permissions (ops-only, external-only,
+supplier-recipient-only, idempotent), sanitized portal view, portal reply
+attribution and live event, bad-token 404s, and the simulation banner.

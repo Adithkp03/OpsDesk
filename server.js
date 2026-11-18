@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('path');
 const { db, logActivity, linkTickets } = require('./db');
-const { INTENTS, suggestIntent } = require('./intent');
+const { INTENTS, suggestIntent, suggestConversation } = require('./intent');
 const {sla}=require('./travel');
 const {isOps,canRead,scope}=require('./access');
 
@@ -52,13 +52,64 @@ app.get('/api/whoami', currentUser, (req, res) => {
   res.json(u);
 });
 
+// --- Real-time sync (SSE). EventSource cannot set request headers, so this
+// ONE endpoint also accepts the same credentials as query parameters
+// (?user= demo id / ?token= firebase ID token, exactly what the headers carry).
+// Every other API route stays header-strict. Events are role-scoped per
+// connection: org roles receive all ticket events; requesters only their own
+// created tickets (see realtime.js). Payloads carry ids only; clients re-fetch
+// their own scoped views.
+const realtime = require('./realtime');
+app.get('/api/events', (req, res, next) => {
+  if (req.query.user !== undefined && !req.header('X-User-Id')) req.headers['x-user-id'] = String(req.query.user);
+  if (req.query.token !== undefined && !req.header('Authorization')) req.headers['authorization'] = 'Bearer ' + String(req.query.token);
+  next();
+}, currentUser, (req, res) => realtime.subscribe(req, res, req.user));
+
 // --- Intent suggestion (rules-based, overridable) ---
 app.post('/api/intents/suggest', currentUser, (req, res) => {
-  const { title, description } = req.body || {};
+  const { title, description, conversation } = req.body || {};
   if (typeof title !== 'string' || typeof description !== 'string') {
     return res.status(400).json({ error: 'title and description strings required' });
   }
+  if (typeof conversation === 'string' && conversation.trim()) {
+    return res.json(suggestConversation({ title: title.slice(0, 500), description: description.slice(0, 5000), conversation: conversation.slice(0, 8000) }));
+  }
   res.json(suggestIntent(title.slice(0, 500), description.slice(0, 5000)));
+});
+
+// Re-suggest a ticket's intent from its accumulated conversation (side-thread
+// messages the caller is allowed to read, plus ticket text). Suggestion only -
+// applying it is a separate, permission-checked call. Requesters contribute only
+// the external threads they are recipients of; ops see every thread.
+app.post('/api/tickets/:id/intent-resuggest', currentUser, (req, res) => {
+  const { ticket: t, error } = getTicketScoped(req, Number(req.params.id));
+  if (error) return res.status(error).json({ error: 'Ticket not accessible' });
+  const rows = isOps(req.user)
+    ? db.prepare(`SELECT m.body FROM side_messages m JOIN side_threads st ON st.id=m.thread_id WHERE st.ticket_id=? ORDER BY m.id DESC LIMIT 12`).all(t.id)
+    : db.prepare(`SELECT m.body FROM side_messages m JOIN side_threads st ON st.id=m.thread_id
+        JOIN side_recipients r ON r.thread_id=st.id JOIN side_contacts c ON c.id=r.contact_id
+        WHERE st.ticket_id=? AND st.visibility='external' AND c.user_id=? ORDER BY m.id DESC LIMIT 12`).all(t.id, req.user.id);
+  const conversation = rows.map(r => r.body.slice(0, 1000)).join('\n');
+  const suggestion = conversation.trim()
+    ? suggestConversation({ title: t.title, description: t.description, conversation })
+    : suggestIntent(t.title, t.description || '');
+  res.json({ suggestion, current_intent_id: t.intent_id, differs: suggestion.intent_id !== t.intent_id && !suggestion.abstain, sources: { thread_messages_used: rows.length } });
+});
+
+// Apply an intent to an existing ticket: ops roles, or the requester who created
+// it (the same manual-select owner as at creation). Logged on the timeline.
+app.post('/api/tickets/:id/intent', currentUser, (req, res) => {
+  const { ticket: t, error } = getTicketScoped(req, Number(req.params.id));
+  if (error) return res.status(error).json({ error: 'Ticket not accessible' });
+  if (!isOps(req.user) && t.created_by !== req.user.id) return res.status(403).json({ error: 'Only ops or the ticket creator can change the intent' });
+  const intent = INTENTS.find(i => i.id === (req.body || {}).intent_id);
+  if (!intent) return res.status(400).json({ error: 'Choose a valid intent' });
+  if (intent.id !== t.intent_id) {
+    db.prepare("UPDATE tickets SET intent_id=?, updated_at=datetime('now') WHERE id=?").run(intent.id, t.id);
+    logActivity(t.id, req.user.id, 'intent_changed', `Intent ${t.intent_label} -> ${intent.label}`);
+  }
+  res.json({ id: t.id, intent_id: intent.id, intent_label: intent.label });
 });
 
 // --- Queue ---
@@ -184,6 +235,7 @@ app.get('/api/tickets/:id', currentUser, (req, res) => {
 });
 
 const {ownership} = require('./collaboration')(app,{currentUser,canSeeAll,getTicketScoped});
+require('./portal')(app); // simulated supplier portal: token links for external threads
 const {escalate}=require('./travel').setup(app,{currentUser,canSeeAll,getTicketScoped,ownership});
 
 // --- Status flow: New -> Open -> Pending -> Escalated -> Resolved -> Closed ---

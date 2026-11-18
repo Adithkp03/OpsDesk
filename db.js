@@ -67,9 +67,11 @@ if (!db.prepare('PRAGMA table_info(users)').all().some(c => c.name === 'firebase
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_firebase_uid ON users(firebase_uid) WHERE firebase_uid IS NOT NULL');
 
 
+let activityListener = null; // set by realtime.js; keeps db.js dependency-free
 function logActivity(ticketId, actorId, type, detail) {
   db.prepare('INSERT INTO activity (ticket_id, actor_id, type, detail) VALUES (?,?,?,?)')
     .run(ticketId, actorId, type, detail || '');
+  if (activityListener) { try { activityListener(ticketId, type); } catch { /* listeners never break writes */ } }
 }
 
 function linkTickets(a, b, reason, actorId) {
@@ -89,4 +91,4 @@ function linkTickets(a, b, reason, actorId) {
   return true;
 }
 
-module.exports = { db, logActivity, linkTickets, DB_PATH };
+module.exports = { db, logActivity, linkTickets, DB_PATH, onActivity: (fn) => { activityListener = fn; } };
