@@ -38,6 +38,21 @@ audit.run(1008, 4, 2, 1, 'Reassigned to Ananya Rao; manual by Arjun Nair: shift 
 logActivity(1008, 4, 'assigned', 'Reassigned to Ananya Rao; manual by Arjun Nair: shift handover, APAC region match');
 msg.run(thread, 1, null, 'ops', 'Ananya here, I took over this ticket. Flight is SQ423, landing 09:10. Please send the voucher.', snap, stamp(0.25));
 
+// Journey E (conversation insights): the text below is what the "From conversations" insight reads.
+// T-1007 is tagged by its default intent (cancellation) but the ops thread is about a delayed refund,
+// and two tickets repeat the phrase "supplier allotment". Messages are demo text only.
+{
+  const opsThread = db.prepare("INSERT INTO side_threads(ticket_id,subject,visibility,created_by,created_at) VALUES(?,?,?,?,?)").run(1007, 'Cancellation terms and money back', 'internal', 2, stamp(0.7)).lastInsertRowid;
+  const ops = db.prepare('SELECT * FROM side_contacts WHERE id IN (1, 2)').all();
+  for (const c of ops) db.prepare('INSERT INTO side_recipients(thread_id,contact_id) VALUES(?,?)').run(opsThread, c.id);
+  const osnap = JSON.stringify(ops);
+  msg.run(opsThread, 2, null, 'ops', 'Supplier confirms the cancellation, but the refund for the cancelled hotel is delayed. Their finance team says refund pending, no date yet.', osnap, stamp(0.6));
+  msg.run(opsThread, 1, null, 'ops', 'Agency asks again about the refund delay. Supplier allotment was released but the money is not back.', osnap, stamp(0.4));
+  const t6 = db.prepare("INSERT INTO side_threads(ticket_id,subject,visibility,created_by,created_at) VALUES(?,?,?,?,?)").run(1006, 'Rooms still showing sold out', 'internal', 2, stamp(0.4)).lastInsertRowid;
+  for (const c of ops) db.prepare('INSERT INTO side_recipients(thread_id,contact_id) VALUES(?,?)').run(t6, c.id);
+  msg.run(t6, 2, null, 'ops', 'Supplier allotment shows rooms free but our inventory still says sold out. Looks like the inventory sync lags.', osnap, stamp(0.3));
+}
+
 // Journey D: one ticket already waiting in the Escalation Manager queue.
 const t2 = stamp(9);
 tkt.run(1009, 'Visa letter missing, flight in 30 hours',
@@ -56,6 +71,7 @@ const fb = db.prepare('INSERT OR REPLACE INTO ticket_feedback(ticket_id,themes,p
 fb.run(1003, JSON.stringify(['payment_issue', 'refund_delay']), 'BUG-1182 refund status does not sync to agency portal', 4);
 fb.run(1006, JSON.stringify(['inventory_sync']), 'BUG-1190 sold-out flag lags supplier allotment', 4);
 fb.run(1009, JSON.stringify(['documentation', 'supplier_confirmation']), '', 4);
+fb.run(1002, JSON.stringify(['other']), '', 4); // hurried tag: the wording says refund delay, which conversation insights flag as not tagged yet
 
 // SLA mix for Journey D: one breached (1009), two at risk (1003, 1007), the rest on track.
 // Ages are relative to seeding time, so SLA states drift as real time passes:

@@ -32,7 +32,8 @@ npm start
 Run the checks:
 
 ```bash
-npm test        # 505 checks across 9 files, including test/journeys.js which walks demo journeys A-E
+npm test        # 515 checks across 10 files (restart.js counts as one scenario), including test/journeys.js which walks demo journeys A-E
+npm run bench   # optional: 50K-ticket synthetic scale and live-update benchmark (about a minute)
 ```
 
 ## Demo script (about 4 minutes)
@@ -73,7 +74,10 @@ the API (`test/journeys.js`), so each step below is also an automated check.
    other tickets. Move T-1009 to Pending with a note. The escalation is its own timeline event.
 
 **E. Insights and data (about 30 s)**
-1. `?as=4`, Weekly insights: themes ranked by ticket count, with sample tickets. Ops tags
+1. `?as=4`, Weekly insights: themes ranked by ticket count, with sample tickets. Scroll to
+   "From conversations": T-1002 is hand-tagged Other but its wording says refund delay, so it
+   is flagged "not tagged yet" with matched phrases; T-1006's theme comes from its side
+   conversation; "supplier allotment" shows up as a repeated phrase. Suggestions only. Ops tags
    (T-1003 refund and payment, T-1006 with a bug reference) count alongside default intents.
 2. Export matching tickets as CSV from the queue (streams every row, no cutoff) and open
    Data retention & archive policy.
@@ -92,6 +96,7 @@ start:secured` switches to verified Firebase sign-in).
      |-- intent.js, sla.js       offline Naive Bayes intent, travel-aware SLA policy
      |-- collaboration.js        routing, ownership audit, side conversations
      |-- travel.js, portal.js    escalation, insights, simulated supplier portal
+     |-- insight-mining.js       conversation-derived theme suggestions and recurring phrases
      |-- webhooks.js, csat.js, macros.js   local-only webhooks, CSAT, canned replies
      `-- better-sqlite3 (one file)   tickets, links, activity, threads, audit
 ```
@@ -333,8 +338,17 @@ Normal `npm run seed` refuses to overwrite an existing database; `git pull` does
 ## MVP-5: feedback themes and this-week insights
 
 - Theme tags default to the ticket's fixed intent taxonomy. Ops can correct/add multiple
-  themes, with an audit event, without changing that original intent. No freeform model
-  extraction or access to side-conversation text is needed.
+  themes, with an audit event, without changing that original intent.
+- **Conversation insights (suggestions only).** Weekly insights also have a "From
+  conversations" section (`insight-mining.js`). It reads ticket title, description and
+  side-conversation messages that ops can already read, runs the offline intent classifier
+  over the whole conversation (it abstains on mixed or unclear text), and shows matched
+  phrases as evidence. A ticket whose conversation points at a theme its tags do not carry is
+  flagged "not tagged yet". It also lists two-word phrases that repeat across 2+ tickets this
+  week, outside the fixed taxonomy. Nothing is written back: tags change only when ops save
+  them. No model calls, no network, no per-ticket cost. Limits: bag-of-words, English only,
+  small training corpus, no accuracy benchmark, reads at most the 1000 newest tickets of the
+  week and the last 12 messages per ticket. It is a lead for a human, not an AI summary.
 - Optional product/bug reference is plain text, persisted on the feedback record. It is not
   a live issue tracker integration and does not create a bug or send a message.
 - Weekly insights are ops-only: **Monday 00:00 UTC through the current time**, based on ticket
@@ -380,8 +394,29 @@ EM's queue, save/reopen tags, insight sample navigation and requester denial.
   or runs the documented destructive seed reset.
 - Backups: stop the app and copy the database plus any `-wal`/`-shm` files together,
   or use the SQLite backup API. Protect backups and exports; no cloud backup exists.
-- **Scale design path** (documented design, not a performance claim): SQLite is a
-  single-process demo store, not a production 50K-row or near-real-time guarantee.
+- **Measured on synthetic data** (`npm run bench`, then see `bench/scale.js`): 50,000 tickets in a
+  temp database on a 2-CPU sandbox, Node 22, one server process, loopback, 3 runs each, median.
+  Queue first page of 200: about 0.9 s (page of 50: about 0.5 s). Lead overview: about 0.26 s.
+  Weekly insights including conversation mining: about 0.23 s. Full CSV export of 50,000 rows
+  (17 MB): about 0.55 s, streamed. Server memory about 220 MB. Creating a ticket: about 2 ms
+  median. Live updates: one status change reached 50 connected SSE clients in about 2 ms
+  median, 4 ms p95. These are one machine, synthetic tickets without long threads, no
+  concurrent users and no network, so read them as "this design does not fall over at 50K rows
+  on a laptop", not as a capacity or SLA claim.
+- **What the benchmark found and fixed.** Before: at 20,000 tickets the queue list took about
+  15 s and returned 17 MB, because it computed linked-case counts for every ticket and
+  returned every row; creating a ticket took about 195 ms and linked the new ticket to every
+  old ticket of the same agency and intent. After: lists are paged (default 200, max 1000,
+  with `total` and `has_more`), link counts are computed only for the returned page, and
+  automatic links are capped (same booking: 20 most recent; same agency + intent: 5 most recent
+  open tickets from the last 90 days). Missing indexes were added. The caps are policy values.
+  Filters that depend on the clock (SLA state) still scan all rows before paging, which is why
+  the first page is not instant at 50K.
+- **Not measured:** many concurrent users, long threads, large attachments, multi-process or
+  multi-host deployment, data larger than 50K tickets, or a hosted database. The "50K
+  commitment" in the brief is met here only as a single-process local benchmark.
+- **Scale design path** (documented design beyond what was measured): SQLite is a
+  single-process demo store, not a production guarantee.
   A production deployment would use scheduled snapshot export jobs instead of
   interactive full exports, keyset (cursor) pagination instead of OFFSET for large
   queues and APIs, a change-data-capture feed or transactional outbox table for

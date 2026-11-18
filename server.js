@@ -110,40 +110,59 @@ app.post('/api/tickets/:id/intent', currentUser, (req, res) => {
 });
 
 // --- Queue ---
+// Queue list. Scale note: the per-ticket linked-case count walks a recursive CTE, so it is
+// computed only for the rows actually returned (one page), never for every ticket in the
+// database. Lists are paged (default 200, max 1000) and return the total so screens can say
+// "showing 200 of 50,000". Filters are applied before paging.
 app.get('/api/tickets', currentUser, (req, res) => {
   const access=scope(req.user),peerAccess=scope(req.user,'peer');
-  const rows = db.prepare(`
-    SELECT t.id, t.title, t.agency_id, a.name AS agency_name, a.region AS agency_region,
-           t.tboh, t.priority, t.intent_id, i.label AS intent_label, t.status,
-           t.check_in_date, t.lcd_date, t.assigned_to, au.name AS assigned_to_name,
-           t.created_at, t.updated_at, t.completed_at,t.work_queue,t.created_by,
-           (WITH RECURSIVE component(id) AS (
-             SELECT t.id UNION
+  const q=req.query;
+  const limit=Math.min(1000,Math.max(1,parseInt(q.limit,10)||200)),offset=Math.max(0,parseInt(q.offset,10)||0);
+  const linkCountStmt=db.prepare(`WITH RECURSIVE component(id) AS (
+             SELECT @tid UNION
              SELECT CASE WHEN l.ticket_id=c.id THEN l.linked_ticket_id ELSE l.ticket_id END
              FROM component c JOIN ticket_links l ON l.ticket_id=c.id OR l.linked_ticket_id=c.id
              JOIN tickets peer ON peer.id=CASE WHEN l.ticket_id=c.id THEN l.linked_ticket_id ELSE l.ticket_id END
-             WHERE peer.agency_id=t.agency_id AND ${peerAccess.sql}
-           ) SELECT COUNT(*)-1 FROM component) AS link_count
+             WHERE peer.agency_id=@tagency AND ${peerAccess.sql}
+           ) SELECT COUNT(*)-1 AS n FROM component`);
+  const linkCount=t=>linkCountStmt.get({...peerAccess.params,tid:t.id,tagency:t.agency_id}).n;
+  const where=[access.sql],params={...access.params};
+  if(q.view==='triage')where.push('t.assigned_to IS NULL');
+  if(q.view==='mine'){where.push('t.assigned_to=@me');params.me=req.user.id;}
+  if(q.region&&typeof q.region==='string'){where.push('a.region=@region');params.region=q.region;}
+  if(q.intent&&typeof q.intent==='string'){where.push('t.intent_id=@intent');params.intent=q.intent;}
+  if(q.status&&typeof q.status==='string'){where.push('t.status=@status');params.status=q.status;}
+  if(q.view==='escalation')where.push("t.work_queue='escalation'");
+  if(q.view==='operations')where.push("t.work_queue='operations'");
+  if(q.view==='linked')where.push('(EXISTS(SELECT 1 FROM ticket_links l WHERE l.ticket_id=t.id OR l.linked_ticket_id=t.id))');
+  let tickets=db.prepare(`
+    SELECT t.id, t.title, t.agency_id, a.name AS agency_name, a.region AS agency_region,
+           t.tboh, t.priority, t.intent_id, i.label AS intent_label, t.status,
+           t.check_in_date, t.lcd_date, t.assigned_to, au.name AS assigned_to_name,
+           t.created_at, t.updated_at, t.completed_at,t.work_queue,t.created_by
     FROM tickets t
     JOIN agencies a ON a.id = t.agency_id
     JOIN intents i ON i.id = t.intent_id
     LEFT JOIN users au ON au.id = t.assigned_to
-    WHERE ${access.sql}
-    ORDER BY CASE t.priority WHEN 'P1' THEN 0 WHEN 'P2' THEN 1 ELSE 2 END, t.updated_at DESC
-  `).all(access.params);
-  let tickets=rows;
-  const q=req.query;
-  if(q.view==='triage')tickets=tickets.filter(t=>t.assigned_to===null);
-  if(q.view==='mine')tickets=tickets.filter(t=>t.assigned_to===req.user.id);
-  if(q.region)tickets=tickets.filter(t=>t.agency_region===q.region);
-  if(q.intent)tickets=tickets.filter(t=>t.intent_id===q.intent);
-  if(q.view==='linked')tickets=tickets.filter(t=>t.link_count>0);
-  if(q.view==='escalation')tickets=tickets.filter(t=>t.work_queue==='escalation');
-  if(q.view==='operations')tickets=tickets.filter(t=>t.work_queue==='operations');
+    WHERE ${where.join(' AND ')}
+    ORDER BY CASE t.priority WHEN 'P1' THEN 0 WHEN 'P2' THEN 1 ELSE 2 END, t.updated_at DESC, t.id DESC
+  `).all(params);
+  if(q.view==='linked'){tickets=tickets.map(t=>({...t,link_count:linkCount(t)})).filter(t=>t.link_count>0);}
+  // SLA state depends on the clock, so it is computed here and filtered before paging.
   tickets=tickets.map(t=>({...t,sla:sla(t)}));
   if(q.sla)tickets=tickets.filter(t=>t.sla.state===q.sla);
-  res.json({ tickets });
+  const total=tickets.length;
+  tickets=tickets.slice(offset,offset+limit);
+  if(q.view!=='linked')tickets=tickets.map(t=>({...t,link_count:linkCount(t)}));
+  res.json({ tickets, total, offset, limit, has_more: offset+tickets.length<total });
 });
+
+// Link fan-out is bounded so a busy agency does not link every new ticket to thousands of old
+// ones (measured: unbounded intent links made ticket creation grow linearly with history).
+// Same booking: up to 20 most recent. Same agency + intent: up to 5 most recent open tickets
+// from the last 90 days. Both are policy values, not claims about the right numbers.
+const LINK_CAP_TBOH = 20, LINK_CAP_INTENT = 5;
+db.exec('CREATE INDEX IF NOT EXISTS ticket_booking ON tickets(agency_id,tboh,id); CREATE INDEX IF NOT EXISTS ticket_agency_intent ON tickets(agency_id,intent_id,id);');
 
 // --- Create ticket: validates input, auto-links by TBOH/agency/intent, logs activity ---
 app.post('/api/tickets', currentUser, (req, res) => {
@@ -180,11 +199,11 @@ app.post('/api/tickets', currentUser, (req, res) => {
   // First-class linkage (PS Problem 1): same booking, then same agency + intent
   const linked = [];
   if (tboh) {
-    for (const m of db.prepare('SELECT id FROM tickets WHERE agency_id=? AND tboh=? AND id<>?').all(agencyId, tboh, id)) {
+    for (const m of db.prepare('SELECT id FROM tickets WHERE agency_id=? AND tboh=? AND id<>? ORDER BY id DESC LIMIT ?').all(agencyId, tboh, id, LINK_CAP_TBOH)) {
       if (linkTickets(id, m.id, `Same booking (TBOH ${tboh})`, req.user.id)) linked.push({ id: m.id, reason: `Same booking (TBOH ${tboh})` });
     }
   }
-  for (const m of db.prepare('SELECT id FROM tickets WHERE agency_id=? AND intent_id=? AND id<>?').all(agencyId, intent.id, id)) {
+  for (const m of db.prepare("SELECT id FROM tickets WHERE agency_id=? AND intent_id=? AND id<>? AND status<>'Closed' AND created_at>=datetime('now','-90 days') ORDER BY id DESC LIMIT ?").all(agencyId, intent.id, id, LINK_CAP_INTENT)) {
     if (linkTickets(id, m.id, `Same agency + intent (${intent.label})`, req.user.id)) linked.push({ id: m.id, reason: `Same agency + intent (${intent.label})` });
   }
   res.status(201).json({ id, linked:linked.filter(l=>canRead(req.user,db.prepare('SELECT * FROM tickets WHERE id=?').get(l.id))) });

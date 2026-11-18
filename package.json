@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node server.js",
     "seed": "node seed.js",
+    "bench": "node bench/scale.js",
     "seed:demo": "node seed.js --wipe --demo",
     "test": "node test/smoke.js && node test/collaboration.js && node test/travel.js && node test/data-access.js && node test/firebase-auth.js && node test/restart.js && node test/realtime-portal.js && node test/extras.js && node test/extras-restart.js && node test/journeys.js",
     "start:demo": "node server.js",
