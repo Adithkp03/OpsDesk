@@ -103,7 +103,7 @@ async function viewTicket(id) {
   catch (e) { $app.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
   const { ticket: t, links, timeline } = data;
   const opsUsers = boot.users.filter(x => ['agent', 'em', 'lead'].includes(x.role));
-  const others = (await api('/tickets')).tickets.filter(x => x.id !== t.id);
+  const others = (await api('/tickets?limit=200')).tickets.filter(x => x.id !== t.id);
   $app.innerHTML = `
     <div class="page-head">
       <div><h1>${tid(t.id)} · ${esc(t.title)}</h1>
